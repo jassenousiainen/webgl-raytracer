@@ -22,8 +22,6 @@ var fragmentShaderSource = document.querySelector("#fragment-shader").text;
 var vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
 var fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
 
-
-// --- link those 2 shaders into a program ---
 function createProgram(gl, vertexShader, fragmentShader) {
     var program = gl.createProgram();
     gl.attachShader(program, vertexShader);
@@ -52,21 +50,21 @@ gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
 
 
 // ===== RENDERING =====
-xmove = -2.0
+xmove = 0
 moveinv = 1.0
 
 requestAnimationFrame(drawScene);
 function drawScene() {
-    if (xmove > 2.0)
+    if (xmove > 3.0)
         moveinv = -1.0
-    else if (xmove < -2.0)
+    else if (xmove < -3.0)
         moveinv = 1.0
     xmove += 0.01 * moveinv
-    // Tell WebGL how to convert from clip space to pixels
-    gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
-    gl.clearColor(0, 0, 0, 0);      // Clear the canvas
+    
+    gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);   // Tell WebGL how to convert from clip space to pixels
+    gl.clearColor(0, 0, 0, 0);                              // Clear the canvas
     gl.clear(gl.COLOR_BUFFER_BIT);
-    gl.useProgram(program);         // Tell it to use our program (pair of shaders)
+    gl.useProgram(program);                                 // Tell it to use our program (pair of shaders)
 
     gl.enableVertexAttribArray(positionAttributeLocation);                          // Turn on the attribute
     gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);                                 // Bind the position buffer.
@@ -90,7 +88,10 @@ function drawScene() {
     }
 
     let planes = []
-    planes.push({x: 0, y: 1.0, z: 0, r: 1.0, g: 1.0, b: 1.0, offset: -1.8})
+    planes.push({x: 0.0, y: 1.0, z: 0, r: 1.0, g: 1.0, b: 1.0, offset: -1.8})
+    planes.push({x: -1.0, y: 0.0, z: 0, r: 1.0, g: 0.5, b: 0.5, offset: 4.5})
+    planes.push({x: 1.0, y: 0.0, z: 0, r: 0.5, g: 1.0, b: 0.5, offset: -4.5})
+    planes.push({x: 0, y: 0, z: -1.0, r: 1.0, g: 1.0, b: 1.0, offset: 4.0})
     for (let i = 0; i < planes.length; i++) {
         offsetLoc = gl.getUniformLocation(program, 'planeOffsets[' + i + ']')
         normalLoc = gl.getUniformLocation(program, 'planeNormals[' + i + ']')
@@ -102,7 +103,7 @@ function drawScene() {
 
     let lights = []
     lights.push({x: -2, y: 0.5, z: -2.5, r: 1.0, g: 1.0, b: 1.0})
-    lights.push({x: 1, y: 1.5, z: -1.0, r: 1.0, g: 1.0, b: 1.0})
+    lights.push({x: 1, y: 2.0, z: -1.0, r: 1.0, g: 1.0, b: 1.0})
     for (let i = 0; i < lights.length; i++) {
         posLoc = gl.getUniformLocation(program, 'lightPosition[' + i + ']')
         colLoc = gl.getUniformLocation(program, 'lightIntensity[' + i + ']')

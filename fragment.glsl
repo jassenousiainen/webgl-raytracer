@@ -4,15 +4,16 @@ uniform vec3 sphereCenters[5];
 uniform vec3 sphereColors[5];
 uniform vec3 lightPosition[2];
 uniform vec3 lightIntensity[2];
-uniform float planeOffsets[4];
-uniform vec3 planeNormals[4];
-uniform vec3 planeColors[4];
+uniform float planeOffsets[1];
+uniform vec3 planeNormals[1];
+uniform vec3 planeColors[1];
 uniform vec3 ambientLight;
 
-varying vec3 vPosition;
+varying lowp vec3 origin;
+varying lowp vec3 ray;
 
 const float quadratic_attenuation = 0.05;
-const float linear_attenuation = 1.0;
+const float linear_attenuation = 0.8;
 const float constant_attenuation = 0.0;
 const vec3 specular_color = vec3(1.0, 1.0, 1.0);
 const float specular_exponent = 32.0;
@@ -95,7 +96,7 @@ bool intersect(vec3 ray_origin, vec3 ray_direction, inout float t_hit, float tmi
     }
 
     // Intersect planes
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 1; i++) {
         float planeOffset = planeOffsets[i];
         vec3 planeNormal = planeNormals[i];
 	    bool tmp = intersectPlane(ray_origin, ray_direction, planeOffset, planeNormal, tmin, t_hit);
@@ -114,7 +115,7 @@ bool intersect(vec3 ray_origin, vec3 ray_direction, inout float t_hit, float tmi
         if (tmp) {
             position = ray_origin + ray_direction * t_hit;
 		    normal = normalize(position - center);
-            color = vec3(100.0, 100.0, 100.0);
+            color = lightIntensity[i] * 100.0;
 			intersected = true;
         }
     }
@@ -129,7 +130,7 @@ bool intersectShadowRay(vec3 ray_origin, vec3 ray_direction, inout float t_hit, 
 	    if (intersectSphere(ray_origin, ray_direction, center, 0.8, tmin, t_hit))
             return true;
     }
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 1; i++) {
         float planeOffset = planeOffsets[i];
         vec3 planeNormal = planeNormals[i];
 	    if (intersectPlane(ray_origin, ray_direction, planeOffset, planeNormal, tmin, t_hit))
@@ -139,13 +140,12 @@ bool intersectShadowRay(vec3 ray_origin, vec3 ray_direction, inout float t_hit, 
 }
 
 void main() {
-    vec3 camera_pos = vec3(0, 0, -10.0);
-    vec3 ray_dir = normalize(vPosition - camera_pos);
+    vec3 ray_dir = normalize(ray);
 
     vec3 answer, color, normal, point;
     float t_hit = 100.0;
 
-    intersect(camera_pos, ray_dir, t_hit, 0.01, point, color, normal); // intersect the ray with the primitives
+    intersect(origin, ray_dir, t_hit, 0.01, point, color, normal); // intersect the ray with the primitives
 
     // Ambient light
     answer += ambientLight * color;

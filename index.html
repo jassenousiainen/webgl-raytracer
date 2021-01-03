@@ -1,18 +1,34 @@
 <html>
+    <head>
+        <link rel="stylesheet" href="styles.css" type="text/css">
+    </head>
 
     <body style="background-color: rgb(40, 40, 40);">
-        <canvas id="c" width="1800" height="900" style="display: block; margin: auto;"></canvas>
+        <canvas id="c" width="1800" height="900"></canvas>
+        <div class="controls">
+            <input type="checkbox" id="light1" checked> Light 1 on/off
+            <div class="colorSliders">
+                <label>r:</label><input type="range" min="0" max="100" value="100" id="light1red">
+                <label>g:</label><input type="range" min="0" max="100" value="100" id="light1green">
+                <label>b:</label><input type="range" min="0" max="100" value="100" id="light1blue">
+            </div>
+        </div>
 
         <script id="vertex-shader" type="x-shader/x-vertex">
+            uniform mat4 invprojview;
+            uniform float near;
+            uniform float far;
+            
             attribute vec4 a_position;
-
-            varying vec3 vPosition;
             
-            const vec2 scale = vec2(0.5, 0.5);
-            
+            varying lowp vec3 origin;
+            varying lowp vec3 ray;
+                        
             void main() {
               gl_Position = a_position;
-              vPosition = vec3(a_position.x*2.0, a_position.y, -6.5);
+              // https://stackoverflow.com/a/52764898
+              origin = (invprojview * vec4(a_position.xy, -1.0, 1.0) * near).xyz;
+              ray = (invprojview * vec4(a_position.xy * (far - near), far + near, far - near)).xyz;
             }
         </script>
         <script id="fragment-shader" type="x-shader/x-fragment">
@@ -22,15 +38,16 @@
             uniform vec3 sphereColors[5];
             uniform vec3 lightPosition[2];
             uniform vec3 lightIntensity[2];
-            uniform float planeOffsets[4];
-            uniform vec3 planeNormals[4];
-            uniform vec3 planeColors[4];
+            uniform float planeOffsets[1];
+            uniform vec3 planeNormals[1];
+            uniform vec3 planeColors[1];
             uniform vec3 ambientLight;
             
-            varying vec3 vPosition;
+            varying lowp vec3 origin;
+            varying lowp vec3 ray;
             
             const float quadratic_attenuation = 0.05;
-            const float linear_attenuation = 1.0;
+            const float linear_attenuation = 0.8;
             const float constant_attenuation = 0.0;
             const vec3 specular_color = vec3(1.0, 1.0, 1.0);
             const float specular_exponent = 32.0;
@@ -46,7 +63,7 @@
                 incident_intensity = intensity * attenuation;
             }
             
-            vec3 shadePhong(in vec3 ray_direction, in vec3 normal, in vec3 dir_to_light, in vec3 incident_intensity, in vec3 diffuse_color) {
+            vec3 shadePhong(vec3 ray_direction, vec3 normal, vec3 dir_to_light, vec3 incident_intensity, vec3 diffuse_color) {
                 vec3 light_incident = incident_intensity * max(0.0, dot(normal, dir_to_light));	        // Brightness depends on the angle of the light and normal
             
                 vec3 specular;
@@ -113,7 +130,7 @@
                 }
             
                 // Intersect planes
-                for (int i = 0; i < 4; i++) {
+                for (int i = 0; i < 1; i++) {
                     float planeOffset = planeOffsets[i];
                     vec3 planeNormal = planeNormals[i];
                     bool tmp = intersectPlane(ray_origin, ray_direction, planeOffset, planeNormal, tmin, t_hit);
@@ -132,7 +149,7 @@
                     if (tmp) {
                         position = ray_origin + ray_direction * t_hit;
                         normal = normalize(position - center);
-                        color = vec3(100.0, 100.0, 100.0);
+                        color = lightIntensity[i] * 100.0;
                         intersected = true;
                     }
                 }
@@ -147,7 +164,7 @@
                     if (intersectSphere(ray_origin, ray_direction, center, 0.8, tmin, t_hit))
                         return true;
                 }
-                for (int i = 0; i < 4; i++) {
+                for (int i = 0; i < 1; i++) {
                     float planeOffset = planeOffsets[i];
                     vec3 planeNormal = planeNormals[i];
                     if (intersectPlane(ray_origin, ray_direction, planeOffset, planeNormal, tmin, t_hit))
@@ -157,13 +174,12 @@
             }
             
             void main() {
-                vec3 camera_pos = vec3(0, 0, -10.0);
-                vec3 ray_dir = normalize(vPosition - camera_pos);
+                vec3 ray_dir = normalize(ray);
             
                 vec3 answer, color, normal, point;
                 float t_hit = 100.0;
             
-                intersect(camera_pos, ray_dir, t_hit, 0.01, point, color, normal); // intersect the ray with the primitives
+                intersect(origin, ray_dir, t_hit, 0.01, point, color, normal); // intersect the ray with the primitives
             
                 // Ambient light
                 answer += ambientLight * color;
@@ -188,6 +204,8 @@
             }
         </script>
           
+        <script src="webgl-utils.js"></script>
+        <script src='gl-matrix-min.js'></script>
         <script src='raytracer.js'></script>
     </body>
 </html>

@@ -1,0 +1,30 @@
+html {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    background-color: rgb(40, 40, 40);
+}
+
+canvas {
+    width: 100vw;
+    height: 100vh;
+}
+
+.controls {
+    position: absolute;
+    top: 1em;
+    right: 1em;
+    width: 250px;
+    height: 350px;
+    padding: 1em;
+    background-color: rgb(255 255 255 / 70%);
+    border-radius: 15px;
+}
+
+.controls label {
+    float: left;
+    clear: both;
+}

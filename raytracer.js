@@ -49,25 +49,36 @@ var positions = [    // Full screen quad (two triangles that cover the screen)
   ];
 gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
 
+function addLightInputs(index) {
+    const container = document.getElementById("lightcontrols");
+    htmlStr = `
+        <br>
+        <b>light ${index+1}</b><br>
+        <div class="sliders">
+            <label>Bright:</label><input type="range" min="0" max="10" value="1" step="0.1" id="lightbrightness${index}">
+            <label>r:</label><input type="range" min="0" max="1" value="1" step="0.1" id="lightred${index}">
+            <label>g:</label><input type="range" min="0" max="1" value="1" step="0.1" id="lightgreen${index}">
+            <label>b:</label><input type="range" min="0" max="1" value="1" step="0.1" id="lightblue${index}">
+            <label>sizeX:</label><input type="range" min="0" max="3" value="0.5" step="0.1" id="lightsizex${index}">
+            <label>sizeY:</label><input type="range" min="0" max="3" value="0.5" step="0.1" id="lightsizey${index}">
+        </div>`;
+    container.insertAdjacentHTML('beforeend', htmlStr);
+}
 
-let xmove = 0
-let moveinv = 1.0
-
-let pointLights = []
-//pointLights.push({x: 0, y: 4, z: 0, r: 1.0, g: 1.0, b: 1.0})
-//pointLights.push({x: -1, y: 2.0, z: 1.0, r: 1.0, g: 1.0, b: 1.0})
-const numPointLights = pointLights.length
-
-let areaLights = []
-areaLights.push({x: 0, y: 3.0, z: 0, sizeX: 0.5, sizeY: 0.5, r: 1.0, g: 1.0, b: 1.0})
-areaLights.push({x: 0, y: 4.0, z: 0, sizeX: 0.5, sizeY: 0.5, r: 1.0, g: 1.0, b: 1.0})
-const numAreaLights = areaLights.length
+// Variables for state of the world
+let lights = []
+lights.push({x: 0, y: 8.0, z: 0})
+lights.push({x: 0, y: 4.0, z: 0})
+const numLights = lights.length
+for (l = 0; l < numLights; l++) {
+    addLightInputs(l);
+}
 
 let spheres = [];
 spheres.push({x: 0, y: 0, z: 0, r: 0, g: 0, b: 0, rr: 1, rg: 1, rb: 1})
-spheres.push({x: 1.25, y: 1.25, z: 1.25, r: 0, g: 1.0, b: 0, rr: 0, rg: 0, rb: 0})
+spheres.push({x: 1.25, y: 1.25, z: 1.25, r: 0, g: 1.0, b: 0, rr: 0, rg: 0.1, rb: 0})
 spheres.push({x: -1.25, y: -1.25, z: 1.25, r: 0, g: 0, b: 0, rr: 0, rg: 1, rb: 1})
-spheres.push({x: -1.25, y: 1.25, z: -1.25, r: 0, g: 0, b: 1.0, rr: 0, rg: 0, rb: 0})
+spheres.push({x: -1.25, y: 1.25, z: -1.25, r: 0, g: 0, b: 1.0, rr: 0, rg: 0, rb: 0.5})
 spheres.push({x: 1.25, y: -1.25, z: -1.25, r: 0, g: 0, b: 0, rr: 1, rg: 0, rb: 1})
 const numSpheres = spheres.length
 
@@ -95,14 +106,29 @@ let keyDownW = false
 let keyDownA = false
 let keyDownS = false
 let keyDownD = false
-let rayBounces = 4;
-
+let reflectionBounces = 3;
 let lightRot = 0
 let lightPos = vec3.create()
+let shadowDim = 3;
+let xmove = 0
+let moveinv = 1.0
+let then = 0;
+
+const fpsElem = document.getElementById('fps');
+const GIbutton = document.getElementById('globalillumination');
+const indirectSamplesElem = document.getElementById('indirectsamples');
+const shadowSamplesElem = document.getElementById('shadowsamples');
+const reflectionBouncesElem = document.getElementById('reflectionbounces');
+const areaLightsElem = document.getElementById('arealightsenable');
+
 
 // ========== RENDERING ==========
-requestAnimationFrame(drawScene);
-function drawScene() {
+function drawScene(now) {
+    now *= 0.001;
+    const deltaTime = now - then;
+    then = now;
+    fpsElem.innerText = Math.floor(1.0/deltaTime);
+    
     resize(gl);
     gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);   // Tell WebGL how to convert from clip space to pixels
     gl.clearColor(0, 0, 0, 0);                              // Clear the canvas
@@ -113,8 +139,7 @@ function drawScene() {
     gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);                                 // Bind the position buffer.
     gl.vertexAttribPointer(positionAttributeLocation, 2, gl.FLOAT, false, 0, 0);    // Tell the attribute how to get data out of positionBuffer (ARRAY_BUFFER)
 
-
-    // Camera
+    // ----- Camera -----
     if (keyDownW) {
         camX += Math.cos(pitch) * Math.cos(yaw + (Math.PI/2)) * 0.05;
         camY += Math.sin(pitch) * 0.05;
@@ -145,67 +170,66 @@ function drawScene() {
     mat4.mul(inverseProjectionViewMatrix, projectionMatrix, viewMatrix)
     mat4.invert(inverseProjectionViewMatrix, inverseProjectionViewMatrix)
 
-
-    // Set uniforms
+    // ----- Set uniforms -----
     gl.uniform1f(gl.getUniformLocation(program, 'near'), near)
     gl.uniform1f(gl.getUniformLocation(program, 'far'), far)
     gl.uniformMatrix4fv(gl.getUniformLocation(program, 'invprojview'), false, inverseProjectionViewMatrix)
     gl.uniform3f(gl.getUniformLocation(program, 'ambientLight'), 0.01, 0.01, 0.01)
-    gl.uniform1i(gl.getUniformLocation(program, 'numPointLights'), numPointLights)
-    gl.uniform1i(gl.getUniformLocation(program, 'numAreaLights'), numAreaLights)
+    gl.uniform1i(gl.getUniformLocation(program, 'numLights'), numLights)
     gl.uniform1i(gl.getUniformLocation(program, 'numSpheres'), numSpheres)
     gl.uniform1i(gl.getUniformLocation(program, 'numPlanes'), numPlanes)
-    gl.uniform1i(gl.getUniformLocation(program, 'rayBounces'), rayBounces)
+    gl.uniform1i(gl.getUniformLocation(program, 'rayBounces'), reflectionBouncesElem.value)
+    gl.uniform1i(gl.getUniformLocation(program, 'enableGI'), GIbutton.checked ? 1 : 0)
+    gl.uniform1i(gl.getUniformLocation(program, 'indirectSamples'), indirectSamplesElem.value)
 
-    shadowSamples = document.getElementById('shadowsamples').value;
-    shadowDim = Math.floor(Math.sqrt(shadowSamples));
-    shadowSamples = Math.pow(shadowDim, 2);
-    gl.uniform1i(gl.getUniformLocation(program, 'shadowSamples'), shadowSamples)
+    shadowDim = Math.floor(Math.sqrt(shadowSamplesElem.value));
     gl.uniform1f(gl.getUniformLocation(program, 'shadowDim'), shadowDim)
+    gl.uniform1i(gl.getUniformLocation(program, 'shadowSamples'), Math.pow(shadowDim, 2)) // number of samples is forced to power of 2
     
-    lightRot += 0.005
+    lightRot += deltaTime * 0.5
     vec3.rotateY(lightPos, [-3,2,0], [0,0,0], lightRot)
-    areaLights[0].x = lightPos[0];
-    areaLights[0].y = lightPos[1];
-    areaLights[0].z = lightPos[2];
+    lights[1].x = lightPos[0];
+    lights[1].y = lightPos[1];
+    lights[1].z = lightPos[2];
 
-    const cb = document.getElementById('light1');
-    const light1red = document.getElementById('light1red').value / 100.0
-    const light1green = document.getElementById('light1green').value / 100.0
-    const light1blue = document.getElementById('light1blue').value / 100.0
-    let light1col = cb.checked ? {r: light1red, g: light1green, b: light1blue} : {r: 0, g: 0, b: 0}
-    areaLights[1] = {x: 0, y: 4, z: 0, sizeX: 0.5, sizeY: 0.5, ...light1col}
+    for (let i = 0; i < numLights; i++) {
+        const lightBrightnessElem = document.getElementById(`lightbrightness${i}`);
+        const lightRed = document.getElementById(`lightred${i}`)
+        const lightGreen = document.getElementById(`lightgreen${i}`)
+        const lightBlue = document.getElementById(`lightblue${i}`)
+        const lightSizeXElem = document.getElementById(`lightsizex${i}`)
+        const lightSizeYElem = document.getElementById(`lightsizey${i}`)
+        lights[i] = {...lights[i], 
+            sizeX: areaLightsElem.checked ? lightSizeXElem.value : 0, 
+            sizeY: areaLightsElem.checked ? lightSizeYElem.value : 0, 
+            r: lightRed.value * lightBrightnessElem.value, 
+            g: lightGreen.value * lightBrightnessElem.value, 
+            b: lightBlue.value * lightBrightnessElem.value}
 
-    for (let i = 0; i < numAreaLights; i++) {
-        posLoc = gl.getUniformLocation(program, 'areaLightPos[' + i + ']')
-        sizeLoc = gl.getUniformLocation(program, 'areaLightSize[' + i + ']')
-        colLoc = gl.getUniformLocation(program, 'areaLightIntensity[' + i + ']')
-        gl.uniform3f(posLoc, areaLights[i].x, areaLights[i].y, areaLights[i].z)
-        gl.uniform2f(sizeLoc, areaLights[i].sizeX, areaLights[i].sizeY)
-        gl.uniform3f(colLoc, areaLights[i].r, areaLights[i].g, areaLights[i].b)
-    }
-
-    for (let i = 0; i < numPointLights; i++) {
-        posLoc = gl.getUniformLocation(program, 'pointLightPos[' + i + ']')
-        colLoc = gl.getUniformLocation(program, 'pointLightIntensity[' + i + ']')
-        gl.uniform3f(posLoc, pointLights[i].x, pointLights[i].y, pointLights[i].z)
-        gl.uniform3f(colLoc, pointLights[i].r, pointLights[i].g, pointLights[i].b)
+        posLoc = gl.getUniformLocation(program, 'lightPos[' + i + ']')
+        sizeLoc = gl.getUniformLocation(program, 'lightSize[' + i + ']')
+        colLoc = gl.getUniformLocation(program, 'lightIntensity[' + i + ']')
+        gl.uniform3f(posLoc, lights[i].x, lights[i].y, lights[i].z)
+        gl.uniform2f(sizeLoc, lights[i].sizeX, lights[i].sizeY)
+        gl.uniform3f(colLoc, lights[i].r, lights[i].g, lights[i].b)
     }
 
     if (xmove > 3.0)
         moveinv = -1.0
     else if (xmove < -3.0)
         moveinv = 1.0
-    xmove += 0.01 * moveinv
+    xmove += moveinv * deltaTime
     spheres[0].x = xmove
 
     for (let i = 0; i < numSpheres; i++) {
         posLoc = gl.getUniformLocation(program, 'sphereCenters[' + i + ']')
         colLoc = gl.getUniformLocation(program, 'sphereColors[' + i + ']')
         refColLoc = gl.getUniformLocation(program, 'reflectiveColors[' + i + ']')
+        //specColLoc = gl.getUniformLocation(program, 'specularColors[' + i + ']')
         gl.uniform3f(posLoc, spheres[i].x, spheres[i].y, spheres[i].z)
         gl.uniform3f(colLoc, spheres[i].r, spheres[i].g, spheres[i].b)
         gl.uniform3f(refColLoc, spheres[i].rr, spheres[i].rg, spheres[i].rb)
+        //gl.uniform3f(specColLoc, spheres[i].sr, spheres[i].sg, spheres[i].sb)
     }
 
     for (let i = 0; i < numPlanes; i++) {
@@ -217,14 +241,15 @@ function drawScene() {
         gl.uniform3f(colLoc, planes[i].r, planes[i].g, planes[i].b)
     }
 
-    // draw
+    // ----- Draw -----
     var primitiveType = gl.TRIANGLE_STRIP;
     var offset = 0;
     var count = 4;
     gl.drawArrays(primitiveType, offset, count);
-
     requestAnimationFrame(drawScene);
 }
+// start loop
+requestAnimationFrame(drawScene);
 
 // ===== EVENT HANDLING =====
 let mousePressed = false

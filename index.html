@@ -6,22 +6,38 @@
     <body style="background-color: rgb(40, 40, 40);">
         <canvas id="c" width="1800" height="900"></canvas>
         <div class="controls">
-            <input type="checkbox" id="light1" checked> Light 1 on/off
-            <div class="colorSliders">
-                <label>r:</label><input type="range" min="0" max="100" value="100" id="light1red">
-                <label>g:</label><input type="range" min="0" max="100" value="100" id="light1green">
-                <label>b:</label><input type="range" min="0" max="100" value="100" id="light1blue">
+            <div class="section">
+                <h3>Rendering settings</h3>
+                <input type="checkbox" id="globalillumination"> GI on/off
+                <br>
+                number of GI samples:
+                <br>
+                <input type="range" value="50" id="indirectsamples" min="1" max="100">
+                <br>
+                number of shadow samples:
+                <br>
+                <input type="range" list="tickmarks" value="9" id="shadowsamples" min="1" max="49">
+                <datalist id="tickmarks">
+                    <option value="1" label="1"></option>
+                    <option value="4" label="4"></option>
+                    <option value="9" label="9"></option>
+                    <option value="16" label="16"></option>
+                    <option value="25" label="25"></option>
+                    <option value="36" label="36"></option>
+                    <option value="49" label="49"></option>
+                </datalist>
+                <br>
+                reflection bounces:
+                <br>
+                <input type="range" value="3" id="reflectionbounces" min="0" max="5" step="1">
             </div>
-            number of shadow samples:
-            <input type="range" list="tickmarks" value="9" id="shadowsamples" min="4" max="49">
-            <datalist id="tickmarks">
-                <option value="4" label="4"></option>
-                <option value="9" label="9"></option>
-                <option value="16" label="16"></option>
-                <option value="25" label="25"></option>
-                <option value="36" label="36"></option>
-                <option value="49" label="49"></option>
-              </datalist>
+            <div class="section" id="lightcontrols">
+                <h3>Lights</h3>
+                <input type="checkbox" id="arealightsenable" checked> Area lights on/off
+                <br>
+            </div>
+            <br>
+            FPS: <span id="fps"></span>
         </div>
 
         <script id="vertex-shader" type="x-shader/x-vertex">
@@ -44,21 +60,17 @@
         <script id="fragment-shader" type="x-shader/x-fragment">
             precision mediump float;
 
-            #define MAX_POINTLIGHTS 10
-            #define MAX_AREALIGHTS 5
+            #define MAX_LIGHTS 5
             #define MAX_SPHERES 10
             #define MAX_PLANES 5
             #define MAX_SHADOW_SAMPLES 49
             #define MAX_RAYBOUNCES 5
+            #define MAX_GISAMPLES 100
             
-            uniform int numPointLights;
-            uniform vec3 pointLightPos[MAX_POINTLIGHTS];
-            uniform vec3 pointLightIntensity[MAX_POINTLIGHTS];
-            
-            uniform int numAreaLights;
-            uniform vec3 areaLightPos[MAX_AREALIGHTS];
-            uniform vec2 areaLightSize[MAX_AREALIGHTS];
-            uniform vec3 areaLightIntensity[MAX_AREALIGHTS];
+            uniform int numLights;
+            uniform vec3 lightPos[MAX_LIGHTS];
+            uniform vec2 lightSize[MAX_LIGHTS];
+            uniform vec3 lightIntensity[MAX_LIGHTS];
             uniform int shadowSamples;
             uniform float shadowDim;
             
@@ -74,17 +86,18 @@
             
             uniform int rayBounces;
             uniform vec3 ambientLight;
+            uniform bool enableGI;
+            uniform int indirectSamples;
             
             varying lowp vec3 origin;
             varying lowp vec3 ray;
             
-            #define quadratic_attenuation 0.2
-            #define linear_attenuation 0.3
+            #define quadratic_attenuation 0.1
+            #define linear_attenuation 0.4
             #define constant_attenuation 0.0
-            const vec3 specular_color = vec3(1.0, 1.0, 1.0);
             #define specular_exponent 32.0
-            
             #define EPSILON 0.001
+            #define PI 3.141593
             float randomSeed = 0.87;
             
             // https://stackoverflow.com/a/10625698
@@ -137,7 +150,7 @@
                 return false;
             }
             
-            bool intersect(vec3 ray_origin, vec3 ray_direction, inout float t_hit, float tmin, out vec3 position, out vec3 color, inout vec3 reflectiveColor, out vec3 normal) {
+            bool intersect(vec3 ray_origin, vec3 ray_direction, inout float t_hit, float tmin, out vec3 position, out vec3 diffuseColor, out vec3 specularColor, out vec3 reflectiveColor, out vec3 normal) {
                 bool intersected = false;
             
                 // Intersect spheres
@@ -148,7 +161,8 @@
                     if (tmp) {
                         position = ray_origin + ray_direction * t_hit;
                         normal = normalize(position - center);
-                        color = sphereColors[i];
+                        diffuseColor = sphereColors[i];
+                        specularColor = vec3(1.0, 1.0, 1.0);
                         reflectiveColor = reflectiveColors[i];
                         intersected = true;
                     }
@@ -163,34 +177,25 @@
                     if (tmp) {
                         position = ray_origin + ray_direction * t_hit;
                         normal = planeNormal;
-                        color = planeColors[i];
+                        diffuseColor = planeColors[i];
+                        specularColor = vec3(0.0, 0.0, 0.0);
+                        reflectiveColor =vec3(0.0, 0.0, 0.0);
                         intersected = true;
                     }
                 }
             
-                // Intersect light spheres
-                for (int i = 0; i < MAX_POINTLIGHTS; i++) {
-                    if (i >= numPointLights) break;
-                    vec3 center = pointLightPos[i];
-                    bool tmp = intersectSphere(ray_origin, ray_direction, center, 0.08, tmin, t_hit);
-                    if (tmp) {
-                        position = ray_origin + ray_direction * t_hit;
-                        normal = normalize(position - center);
-                        color = pointLightIntensity[i] * 100.0;
-                        intersected = true;
-                    }
-                }
-            
-                // Intersect light spheres
-                for (int i = 0; i < MAX_AREALIGHTS; i++) {
-                    if (i >= numAreaLights) break;
-                    vec3 center = areaLightPos[i];
-                    bool tmp = intersectSphere(ray_origin, ray_direction, center, 0.08, tmin, t_hit);
-                    if (tmp) {
-                        position = ray_origin + ray_direction * t_hit;
-                        normal = normalize(position - center);
-                        color = areaLightIntensity[i] * 100.0;
-                        intersected = true;
+                // Intersect lights as spheres
+                if (!enableGI) {
+                    for (int i = 0; i < MAX_LIGHTS; i++) {
+                        if (i >= numLights) break;
+                        vec3 center = lightPos[i];
+                        bool tmp = intersectSphere(ray_origin, ray_direction, center, 0.08, tmin, t_hit);
+                        if (tmp) {
+                            position = ray_origin + ray_direction * t_hit;
+                            normal = normalize(position - center);
+                            diffuseColor = lightIntensity[i] * 100.0;
+                            intersected = true;
+                        }
                     }
                 }
             
@@ -215,29 +220,25 @@
                 return false;
             }
             
-            void pointLightIllumination(vec3 p, vec3 position, vec3 intensity, out float light_distance, out vec3 dir_to_light, out vec3 incident_intensity) {
-                vec3 vec_to_light = position - p;
-                light_distance = length(vec_to_light);
-                float attenuation = 1.0 / (quadratic_attenuation*pow(light_distance, 2.0) + linear_attenuation*light_distance + constant_attenuation);
-                
-                dir_to_light = normalize(vec_to_light);
-                incident_intensity = intensity * attenuation;
-            }
+            void getIncidentIntensity(vec3 p, vec3 position, vec3 intensity, vec2 size, float sample_i, out float light_distance, out vec3 dir_to_light, out vec3 incident_intensity) {
+                vec3 vec_to_light;
             
-            void areaLightIllumination(vec3 p, vec3 position, vec3 intensity, vec2 size, float sample_i, out float light_distance, out vec3 dir_to_light, out vec3 incident_intensity) {
-                float inv_dim = 1.0 / shadowDim;
-                
-                // Get jittered position on the plane
-                float cell_sizeX = size.x * inv_dim;
-                float cell_sizeY = size.y * inv_dim;
-                float xGrid = floor(modulo(sample_i, shadowDim));
-                float yGrid = floor(sample_i * inv_dim);
-                float posX = cell_sizeX * (xGrid + random(p.xy*randomSeed));
-                float posY = cell_sizeY * (yGrid + random(p.yx*randomSeed));
-                float x = position.x - size.x*0.5 + posX;
-                float z = position.z - size.y*0.5 + posY;
-                    
-                vec3 vec_to_light = vec3(x, position.y, z) - p;
+                if (length(size) > 0.0) {
+                    // Get jittered position on the light plane
+                    float inv_dim = 1.0 / shadowDim;
+                    float cell_sizeX = size.x * inv_dim;
+                    float cell_sizeY = size.y * inv_dim;
+                    float xGrid = floor(modulo(sample_i, shadowDim));
+                    float yGrid = floor(sample_i * inv_dim);
+                    float posX = cell_sizeX * (xGrid + random(p.xy*randomSeed));
+                    float posY = cell_sizeY * (yGrid + random(p.yx*randomSeed));
+                    float x = position.x - size.x*0.5 + posX;
+                    float z = position.z - size.y*0.5 + posY;
+                        
+                    vec_to_light = vec3(x, position.y, z) - p;
+                } else {
+                    vec_to_light = position - p;
+                }
                 
                 light_distance = length(vec_to_light);
                 float attenuation = 1.0 / (quadratic_attenuation*pow(light_distance, 2.0) + linear_attenuation*light_distance + constant_attenuation);
@@ -247,8 +248,8 @@
                 randomSeed += 0.01;
             }
             
-            vec3 shadePhong(vec3 ray_direction, vec3 normal, vec3 dir_to_light, vec3 incident_intensity, vec3 diffuse_color) {
-                vec3 light_incident = incident_intensity * max(0.0, dot(normal, dir_to_light));	        // Brightness depends on the angle of the light and normal
+            vec3 shadePhong(vec3 ray_direction, vec3 normal, vec3 dir_to_light, vec3 incident_intensity, vec3 diffuse_color, vec3 specular_color) {
+                vec3 light_incident = incident_intensity * max(0.0, dot(normal, dir_to_light));	        // Brightness depends on the angle between light and normal
             
                 vec3 specular;
                 if (dot(normal, dir_to_light) > 0.0) {												    // Only add specular if light is on the same side as normal
@@ -261,43 +262,31 @@
                 return light_incident * (diffuse_color + specular);
             }
             
-            vec3 illumination(vec3 point, vec3 ray_dir, vec3 normal, vec3 diffuseColor) {
+            // Calculates and returns specular and diffuse illumination from all lights on a given point
+            vec3 illumination(vec3 point, vec3 ray_dir, vec3 normal, vec3 diffuseColor, vec3 specularColor) {
                 vec3 illuminationColor;
-                // Point lights
-                for (int i = 0; i < MAX_POINTLIGHTS; i++) {
-                    if (i >= numPointLights) break;
-                    vec3 incident_intensity, dir_to_light;
-                    float light_distance;
-                    pointLightIllumination(point, pointLightPos[i], pointLightIntensity[i], light_distance, dir_to_light, incident_intensity);
-                    
-                    // Shoot shadow ray from the original intersection to light
-                    vec3 shadowRay_dir = dir_to_light;
-                    float t_shadowHit = light_distance;
-                    intersectShadowRay(point, shadowRay_dir, t_shadowHit, 0.01);
             
-                    if (abs(t_shadowHit - light_distance) < EPSILON) {
-                        illuminationColor += shadePhong(ray_dir, normal, dir_to_light, incident_intensity, diffuseColor);
-                    }
-                }
-                // Area lights (smooth shadows)
-                for (int i = 0; i < MAX_AREALIGHTS; i++) {
-                    if (i >= numAreaLights) break;
+                for (int i = 0; i < MAX_LIGHTS; i++) {
+                    if (i >= numLights) break;
                     vec3 light_sum;
+                    int areaShadowSamples = length(lightSize[i]) > 0.0 ? shadowSamples : 1; // If the size of the light is zero, it is point light and one sample is enough
+                    
                     for (int sample = 0; sample < MAX_SHADOW_SAMPLES; sample++) {
-                        if (sample >= shadowSamples) break;
+                        if (sample >= areaShadowSamples) break;
                         vec3 incident_intensity, dir_to_light;
                         float light_distance;
-                        areaLightIllumination(point, areaLightPos[i], areaLightIntensity[i], areaLightSize[i], float(sample), light_distance, dir_to_light, incident_intensity);
+                        getIncidentIntensity(point, lightPos[i], lightIntensity[i], lightSize[i], float(sample), light_distance, dir_to_light, incident_intensity);
                         
                         vec3 shadowRay_dir = dir_to_light;
                         float t_shadowHit = light_distance;
                         intersectShadowRay(point, shadowRay_dir, t_shadowHit, 0.01);
             
                         if (abs(t_shadowHit - light_distance) < EPSILON) {
-                            light_sum += shadePhong(ray_dir, normal, dir_to_light, incident_intensity, diffuseColor);
+                            light_sum += shadePhong(ray_dir, normal, dir_to_light, incident_intensity, diffuseColor, specularColor);
                         }
                     }
-                    illuminationColor += light_sum / float(shadowSamples);
+            
+                    illuminationColor += light_sum / float(areaShadowSamples);
                 }
             
                 return illuminationColor;
@@ -305,15 +294,52 @@
             
             void main() {
                 vec3 ray_dir = normalize(ray);
-                vec3 pixelColor, diffuseColor, reflectiveColor, normal, point;
+                vec3 pixelColor, diffuseColor, specularColor, reflectiveColor, normal, point;
                 float t_hit = 100.0;
-                intersect(origin, ray_dir, t_hit, 0.01, point, diffuseColor, reflectiveColor, normal); // intersect the ray with objects
+                intersect(origin, ray_dir, t_hit, 0.01, point, diffuseColor, specularColor, reflectiveColor, normal); // intersect the ray with objects
             
                 // Ambient light
-                pixelColor += ambientLight * diffuseColor;
+                if (!enableGI)
+                    pixelColor += ambientLight * diffuseColor;
             
                 // ==== DIRECT ILLUMINATION ====
-                pixelColor += illumination(point, ray_dir, normal, diffuseColor);
+                pixelColor += illumination(point, ray_dir, normal, diffuseColor, specularColor);
+            
+                // ==== INDIRECT ILLUMINATION ====
+                // only one bounce because of performance
+                if (enableGI) {
+                    mat3 transform;
+                    if (abs(normal.x) > abs(normal.y))
+                        transform[2] = vec3(normal.z, 0, -normal.x) / sqrt(normal.x * normal.x + normal.z * normal.z);
+                    else
+                        transform[2] = vec3(0, -normal.z, normal.y) / sqrt(normal.y * normal.y + normal.z * normal.z);
+                    transform[0] = cross(normal, transform[2]);
+                    transform[1] = normal;
+            
+                    // Sample rays uniformly over hemisphere with spherical coordinates
+                    vec3 indirect_sampling_sum;
+                    for (int sample = 0; sample < MAX_GISAMPLES; sample++) {
+                        if (sample >= indirectSamples) break;
+                        float z = random(point.xy*randomSeed);
+                        randomSeed -= 0.01;
+                        float radius = sqrt(1.0 - z * z);						    // uniform radius on hemisphere
+                        float theta = 2.0 * PI * random(point.yx*randomSeed);	    // uniform angle on [0, 2*pi]
+                        vec3 coords = vec3(cos(theta)*radius, z, sin(theta)*radius);// get cartesian coordinates
+                        randomSeed -= 0.02;
+            
+                        // Transform point to world space and trace ray
+                        vec3 indirectDir = transform * coords;
+                        float t_indirectHit = 10.0;
+                        vec3 indirectHitPoint, indirectDiffuseColor, indirectSpecularColor, indirectReflectiveColor, indirectNormal;
+                        intersect(point, indirectDir, t_indirectHit, 0.01, indirectHitPoint, indirectDiffuseColor, indirectSpecularColor, indirectReflectiveColor, indirectNormal);
+            
+                        // Here the z value tells the angle (also need to multiply by 2)
+                        indirect_sampling_sum += z * illumination(indirectHitPoint, indirectDir, indirectNormal, indirectDiffuseColor, indirectSpecularColor);
+                    }
+                    // Add the scaled indirect light to result
+                    pixelColor += (2.0 * indirect_sampling_sum / float(indirectSamples)) * diffuseColor;
+                }
+            
             
                 // ==== MIRROR REFLECTION ====
                 vec3 bounceDir = ray_dir;
@@ -326,14 +352,14 @@
             
                         // Trace the mirror ray and add the result to pixel
                         float t_bounceHit = 100.0;
-                        vec3 bounceDiffuseColor, bounceReflectiveColor, bounceHitPoint;
-                        intersect(bounceOrigin, mirrorDir, t_bounceHit, 0.01, bounceHitPoint, bounceDiffuseColor, bounceReflectiveColor, bounceNormal);
-                        vec3 mirror_sample_color = illumination(bounceHitPoint, mirrorDir, bounceNormal, bounceDiffuseColor);
+                        vec3 bounceDiffuseColor, bounceSpecularColor, bounceReflectiveColor, bounceHitPoint;
+                        intersect(bounceOrigin, mirrorDir, t_bounceHit, 0.01, bounceHitPoint, bounceDiffuseColor, bounceSpecularColor, bounceReflectiveColor, bounceNormal);
+                        vec3 mirror_sample_color = illumination(bounceHitPoint, mirrorDir, bounceNormal, bounceDiffuseColor, bounceSpecularColor);
             
                         pixelColor += mirror_sample_color * reflectiveColor;
                         bounceOrigin = bounceHitPoint;
                         bounceDir = mirrorDir;
-                        reflectiveColor = bounceReflectiveColor * reflectiveColor;
+                        reflectiveColor = bounceReflectiveColor * reflectiveColor;  // Simulates the ray color being affected by the reflective color
                     }
                 }
             

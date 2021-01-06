@@ -7,9 +7,11 @@ The contents of both of these shader files are then just copied to inline HTML.
 ## Features
 - Fully realtime ray-traced, rasterization is only used for the full screen quad
 - Intersection for sphere and plane primitives (and rectangles with currently only fixed direction)
+- Phong shading model for diffuse and specular illumination
 - Supports point lights and rectangle area lights with customizable size
 - Smooth shadows for area lights with customizable number of samples
 - Global illumination with customizable number of samples
 - Mirror reflections with customizable number of bounces (also GI in reflections)
+- Free-fly perspective camera, use WASD -keys to move and mouse while holding left mouse button to look around
 
 I have made this application for the purpose of learning WebGL, so there might be multiple bugs and errors, and thus the code should not be used as a reference.

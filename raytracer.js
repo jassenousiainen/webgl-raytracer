@@ -49,29 +49,29 @@ var positions = [    // Full screen quad (two triangles that cover the screen)
   ];
 gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
 
-function addLightInputs(index) {
+function addLightInputs(index, lightArr) {
     const container = document.getElementById("lightcontrols");
     htmlStr = `
         <br>
         <b>light ${index+1}</b><br>
         <div class="sliders">
-            <label>Bright:</label><input type="range" min="0" max="10" value="1" step="0.1" id="lightbrightness${index}">
+            <label>Bright:</label><input type="range" min="0" max="10" value="${lightArr[index].brightness}" step="0.1" id="lightbrightness${index}">
             <label>r:</label><input type="range" min="0" max="1" value="1" step="0.1" id="lightred${index}">
             <label>g:</label><input type="range" min="0" max="1" value="1" step="0.1" id="lightgreen${index}">
             <label>b:</label><input type="range" min="0" max="1" value="1" step="0.1" id="lightblue${index}">
-            <label>sizeX:</label><input type="range" min="0" max="3" value="0.5" step="0.1" id="lightsizex${index}">
-            <label>sizeY:</label><input type="range" min="0" max="3" value="0.5" step="0.1" id="lightsizey${index}">
+            <label>sizeX:</label><input type="range" min="0" max="3" value="${lightArr[index].sizeX}" step="0.1" id="lightsizex${index}">
+            <label>sizeY:</label><input type="range" min="0" max="3" value="${lightArr[index].sizeY}" step="0.1" id="lightsizey${index}">
         </div>`;
     container.insertAdjacentHTML('beforeend', htmlStr);
 }
 
-// Variables for state of the world
+// Variables to hold the state of the world
 let lights = []
-lights.push({x: 0, y: 8.0, z: 0})
-lights.push({x: 0, y: 4.0, z: 0})
+lights.push({x: 0, y: 4.9999, z: 0, sizeX: 2, sizeY: 2, brightness: 2.5})
+lights.push({x: 0, y: 4.0, z: 0, sizeX: 0.3, sizeY: 0.3, brightness: 0.3})
 const numLights = lights.length
 for (l = 0; l < numLights; l++) {
-    addLightInputs(l);
+    addLightInputs(l, lights);
 }
 
 let spheres = [];
@@ -83,20 +83,21 @@ spheres.push({x: 1.25, y: -1.25, z: -1.25, r: 0, g: 0, b: 0, rr: 1, rg: 0, rb: 1
 const numSpheres = spheres.length
 
 let planes = []
-planes.push({x: 0.0, y: 1.0, z: 0, r: 1.0, g: 1.0, b: 1.0, offset: -2})
-planes.push({x: -1.0, y: 0.0, z: 0, r: 1.0, g: 0.5, b: 0.5, offset: 4.5})
-planes.push({x: 1.0, y: 0.0, z: 0, r: 0.5, g: 1.0, b: 0.5, offset: -4.5})
-planes.push({x: 0, y: 0, z: 1.0, r: 1.0, g: 1.0, b: 1.0, offset: -5.0})
+planes.push({x: 0.0, y: 1.0, z: 0, r: 1.0, g: 1.0, b: 1.0, offset: -2.05})  // floor
+planes.push({x: -1.0, y: 0.0, z: 0, r: 1.0, g: 0.3, b: 0.3, offset: 4.5})   // right wall
+planes.push({x: 1.0, y: 0.0, z: 0, r: 0.3, g: 1.0, b: 0.3, offset: -4.5})   // left wall
+planes.push({x: 0, y: 0, z: 1.0, r: 1.0, g: 1.0, b: 1.0, offset: -5.0})     // back wall
+planes.push({x: 0, y: -1.0, z: 0.0, r: 1.0, g: 1.0, b: 1.0, offset: 5.0})   // ceiling
 const numPlanes = planes.length
 
 let near = 0.1
-let far = 4
+let far = 50
 let projectionMatrix = mat4.create()
 let yaw = 0
-let pitch = -0.2
+let pitch = -0.1
 let camX = 0
-let camY = 3
-let camZ = 12
+let camY = 2.4
+let camZ = 15
 let rotY = mat4.create()
 let rotX = mat4.create()
 let translationMatrix = mat4.create()
@@ -115,7 +116,8 @@ let moveinv = 1.0
 let then = 0;
 
 const fpsElem = document.getElementById('fps');
-const GIbutton = document.getElementById('globalillumination');
+const enableGIbutton = document.getElementById('enableGI');
+const enableRefGIbutton = document.getElementById('enableRefGI');
 const indirectSamplesElem = document.getElementById('indirectsamples');
 const shadowSamplesElem = document.getElementById('shadowsamples');
 const reflectionBouncesElem = document.getElementById('reflectionbounces');
@@ -174,12 +176,13 @@ function drawScene(now) {
     gl.uniform1f(gl.getUniformLocation(program, 'near'), near)
     gl.uniform1f(gl.getUniformLocation(program, 'far'), far)
     gl.uniformMatrix4fv(gl.getUniformLocation(program, 'invprojview'), false, inverseProjectionViewMatrix)
-    gl.uniform3f(gl.getUniformLocation(program, 'ambientLight'), 0.01, 0.01, 0.01)
+    gl.uniform3f(gl.getUniformLocation(program, 'ambientLight'), 0.02, 0.02, 0.02)
     gl.uniform1i(gl.getUniformLocation(program, 'numLights'), numLights)
     gl.uniform1i(gl.getUniformLocation(program, 'numSpheres'), numSpheres)
     gl.uniform1i(gl.getUniformLocation(program, 'numPlanes'), numPlanes)
     gl.uniform1i(gl.getUniformLocation(program, 'rayBounces'), reflectionBouncesElem.value)
-    gl.uniform1i(gl.getUniformLocation(program, 'enableGI'), GIbutton.checked ? 1 : 0)
+    gl.uniform1i(gl.getUniformLocation(program, 'enableGI'), enableGIbutton.checked ? 1 : 0)
+    gl.uniform1i(gl.getUniformLocation(program, 'enableRefGI'), enableRefGIbutton.checked ? 1 : 0)
     gl.uniform1i(gl.getUniformLocation(program, 'indirectSamples'), indirectSamplesElem.value)
 
     shadowDim = Math.floor(Math.sqrt(shadowSamplesElem.value));
@@ -225,11 +228,9 @@ function drawScene(now) {
         posLoc = gl.getUniformLocation(program, 'sphereCenters[' + i + ']')
         colLoc = gl.getUniformLocation(program, 'sphereColors[' + i + ']')
         refColLoc = gl.getUniformLocation(program, 'reflectiveColors[' + i + ']')
-        //specColLoc = gl.getUniformLocation(program, 'specularColors[' + i + ']')
         gl.uniform3f(posLoc, spheres[i].x, spheres[i].y, spheres[i].z)
         gl.uniform3f(colLoc, spheres[i].r, spheres[i].g, spheres[i].b)
         gl.uniform3f(refColLoc, spheres[i].rr, spheres[i].rg, spheres[i].rb)
-        //gl.uniform3f(specColLoc, spheres[i].sr, spheres[i].sg, spheres[i].sb)
     }
 
     for (let i = 0; i < numPlanes; i++) {

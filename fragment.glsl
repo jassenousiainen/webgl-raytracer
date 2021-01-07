@@ -1,11 +1,20 @@
+#version 300 es
 precision mediump float;
 
-#define MAX_LIGHTS 5
-#define MAX_SPHERES 10
+#define MAX_LIGHTS 2
+#define MAX_SPHERES 5
 #define MAX_PLANES 5
 #define MAX_SHADOW_SAMPLES 49
 #define MAX_RAYBOUNCES 5
 #define MAX_GISAMPLES 100
+
+#define quadratic_attenuation 0.1
+#define linear_attenuation 0.4
+#define constant_attenuation 0.0
+#define specular_exponent 32.0
+#define EPSILON 0.001
+#define PI 3.141593
+float randomSeed = 0.1;
 
 uniform int numLights;
 uniform vec3 lightPos[MAX_LIGHTS];
@@ -30,16 +39,10 @@ uniform bool enableGI;
 uniform bool enableRefGI;
 uniform int indirectSamples;
 
-varying lowp vec3 origin;
-varying lowp vec3 ray;
+in lowp vec3 origin;
+in lowp vec3 ray;
+out vec4 fragColor;
 
-#define quadratic_attenuation 0.1
-#define linear_attenuation 0.4
-#define constant_attenuation 0.0
-#define specular_exponent 32.0
-#define EPSILON 0.001
-#define PI 3.141593
-float randomSeed = 0.1;
 
 // https://stackoverflow.com/a/10625698
 float random( vec2 p ) {
@@ -49,10 +52,6 @@ float random( vec2 p ) {
     );
     randomSeed += 0.02; // increment, so that each access gets different value
     return fract( cos( dot(p+randomSeed,K1) ) * 12345.6789 );
-}
-
-float modulo(float a, float b) {
-    return (a)-(floor((a)/(b))*(b));
 }
 
 bool intersectSphere(vec3 ray_origin, vec3 ray_direction, vec3 center, float radius, float tmin, inout float t_hit) {
@@ -187,10 +186,8 @@ void getIncidentIntensity(vec3 p, vec3 position, vec3 intensity, vec2 size, floa
         float inv_dim = 1.0 / shadowDim;
         float cell_sizeX = size.x * inv_dim;
         float cell_sizeY = size.y * inv_dim;
-        float xGrid = floor(modulo(sample_i, shadowDim));
-        float yGrid = floor(sample_i * inv_dim);
-        float posX = cell_sizeX * (xGrid + random(p.xy));
-        float posY = cell_sizeY * (yGrid + random(p.yx));
+        float posX = cell_sizeX * (mod(sample_i, shadowDim) + random(p.xy));
+        float posY = cell_sizeY * (floor(sample_i * inv_dim) + random(p.yx));
         float x = position.x - size.x*0.5 + posX;
         float z = position.z - size.y*0.5 + posY;
         vec_to_light = vec3(x, position.y, z) - p;
@@ -228,11 +225,11 @@ vec3 illumination(vec3 point, vec3 ray_dir, vec3 normal, vec3 diffuseColor, vec3
         vec3 light_sum;
         int areaShadowSamples = length(lightSize[i]) > 0.0 ? shadowSamples : 1; // If the size of the light is zero, it is point light and one sample is enough
         
-        for (int sample = 0; sample < MAX_SHADOW_SAMPLES; sample++) {
-            if (sample >= areaShadowSamples) break;
+        for (int k = 0; k < MAX_SHADOW_SAMPLES; k++) {
+            if (k >= areaShadowSamples) break;
             vec3 incident_intensity, dir_to_light;
             float light_distance;
-            getIncidentIntensity(point, lightPos[i], lightIntensity[i], lightSize[i], float(sample), light_distance, dir_to_light, incident_intensity);
+            getIncidentIntensity(point, lightPos[i], lightIntensity[i], lightSize[i], float(k), light_distance, dir_to_light, incident_intensity);
             
             float t_shadowHit = light_distance;
             intersectShadowRay(point, dir_to_light, t_shadowHit, 0.01);
@@ -262,8 +259,8 @@ vec3 indirectIllumination(vec3 point, vec3 normal, vec3 diffuseColor) {
 
     // Sample rays uniformly over hemisphere with spherical coordinates
     vec3 indirect_sampling_sum;
-    for (int sample = 0; sample < MAX_GISAMPLES; sample++) {
-        if (sample >= indirectSamples) break;
+    for (int k = 0; k < MAX_GISAMPLES; k++) {
+        if (k >= indirectSamples) break;
         float z = random(point.xy);
         float radius = sqrt(1.0 - z * z);						    // uniform radius on hemisphere
         float theta = 2.0 * PI * random(point.yx);	                // uniform angle on [0, 2*pi]
@@ -318,7 +315,7 @@ void main() {
     intersect(origin, ray_dir, t_hit, 0.0, point, normal, diffuseColor, specularColor, reflectiveColor, isLight);
 
     if (isLight) {  // If the ray hit a light, return its color because they dont have any other properties than surface color
-        gl_FragColor = vec4(diffuseColor, 1.0);
+        fragColor = vec4(diffuseColor, 1.0);
         return;
     }
 
@@ -337,5 +334,5 @@ void main() {
     if (rayBounces > 0 && length(reflectiveColor) > 0.0)
         pixelColor += reflectionIllumination(point, ray_dir, normal, reflectiveColor);
 
-    gl_FragColor = vec4(pixelColor, 1.0);
+    fragColor = vec4(pixelColor, 1.0);
 }

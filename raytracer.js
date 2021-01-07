@@ -4,7 +4,7 @@ const { mat4, mat3, vec3 } = glMatrix;
 
 // --- Create WebGLRenderingContext ---
 var canvas = document.querySelector("#c");
-var gl = canvas.getContext("webgl");
+var gl = canvas.getContext("webgl2");
 
 function createShader(gl, type, source) {
     var shader = gl.createShader(type);
@@ -37,17 +37,6 @@ function createProgram(gl, vertexShader, fragmentShader) {
 }
 var program = createProgram(gl, vertexShader, fragmentShader);
 
-var positionAttributeLocation = gl.getAttribLocation(program, "a_position");    // look up where the vertex data needs to go.
-var positionBuffer = gl.createBuffer();                                         // Create a buffer and put three 2d clip space points in it
-gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);                                 // Bind it to ARRAY_BUFFER (think of it as ARRAY_BUFFER = positionBuffer)
-
-var positions = [    // Full screen quad (two triangles that cover the screen)
-    1.0, 1.0,
-    -1.0, 1.0,
-    1.0, -1.0,
-    -1.0, -1.0
-  ];
-gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
 
 function addLightInputs(index, lightArr) {
     const container = document.getElementById("lightcontrols");
@@ -136,10 +125,6 @@ function drawScene(now) {
     gl.clearColor(0, 0, 0, 0);                              // Clear the canvas
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.useProgram(program);                                 // Tell it to use our program (pair of shaders)
-
-    gl.enableVertexAttribArray(positionAttributeLocation);                          // Turn on the attribute
-    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);                                 // Bind the position buffer.
-    gl.vertexAttribPointer(positionAttributeLocation, 2, gl.FLOAT, false, 0, 0);    // Tell the attribute how to get data out of positionBuffer (ARRAY_BUFFER)
 
     // ----- Camera -----
     if (keyDownW) {
@@ -243,9 +228,9 @@ function drawScene(now) {
     }
 
     // ----- Draw -----
-    var primitiveType = gl.TRIANGLE_STRIP;
+    var primitiveType = gl.TRIANGLES;
     var offset = 0;
-    var count = 4;
+    var count = 3;
     gl.drawArrays(primitiveType, offset, count);
     requestAnimationFrame(drawScene);
 }

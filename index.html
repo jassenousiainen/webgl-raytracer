@@ -51,364 +51,2538 @@
             FPS: <span id="fps"></span>
         </div>
 
-        <script id="vertex-shader" type="x-shader/x-vertex">
+        <script id="vertex-shader" type="x-shader/x-vertex">#version 300 es
+            precision highp float;
             uniform mat4 invprojview;
             uniform float near;
             uniform float far;
             
-            attribute vec4 a_position;
+            out lowp vec3 origin;
+            out lowp vec3 ray;
             
-            varying lowp vec3 origin;
-            varying lowp vec3 ray;
-                        
             void main() {
-              gl_Position = a_position;
-              // https://stackoverflow.com/a/52764898
-              origin = (invprojview * vec4(a_position.xy, -1.0, 1.0) * near).xyz;
-              ray = (invprojview * vec4(a_position.xy * (far - near), far + near, far - near)).xyz;
+                // https://rauwendaal.net/2014/06/14/rendering-a-screen-covering-triangle-in-opengl/
+                float x = -1.0 + float((gl_VertexID & 1) << 2);
+                float y = -1.0 + float((gl_VertexID & 2) << 1);
+                gl_Position = vec4(x, y, 0, 1);
+                            
+                // https://stackoverflow.com/a/52764898
+                origin = (invprojview * vec4(x, y, -1.0, 1.0) * near).xyz;
+                ray = (invprojview * vec4(vec2(x,y) * (far - near), far + near, far - near)).xyz;
             }
         </script>
-        <script id="fragment-shader" type="x-shader/x-fragment">
+        <!-- Fragment GLSL optimized with: https://zz85.github.io/glsl-optimizer/ -->
+        <script id="fragment-shader" type="x-shader/x-fragment">#version 300 es
             precision mediump float;
-
-            #define MAX_LIGHTS 5
-            #define MAX_SPHERES 10
-            #define MAX_PLANES 5
-            #define MAX_SHADOW_SAMPLES 49
-            #define MAX_RAYBOUNCES 5
-            #define MAX_GISAMPLES 100
-            
-            uniform int numLights;
-            uniform vec3 lightPos[MAX_LIGHTS];
-            uniform vec2 lightSize[MAX_LIGHTS];
-            uniform vec3 lightIntensity[MAX_LIGHTS];
-            uniform int shadowSamples;
+            float randomSeed;
+            uniform highp int numLights;
+            uniform vec3 lightPos[2];
+            uniform vec2 lightSize[2];
+            uniform vec3 lightIntensity[2];
+            uniform highp int shadowSamples;
             uniform float shadowDim;
-            
-            uniform int numSpheres;
-            uniform vec3 sphereCenters[MAX_SPHERES];
-            uniform vec3 sphereColors[MAX_SPHERES];
-            uniform vec3 reflectiveColors[MAX_SPHERES];
-            
-            uniform int numPlanes;
-            uniform float planeOffsets[MAX_PLANES];
-            uniform vec3 planeNormals[MAX_PLANES];
-            uniform vec3 planeColors[MAX_PLANES];
-            
-            uniform int rayBounces;
+            uniform highp int numSpheres;
+            uniform vec3 sphereCenters[5];
+            uniform vec3 sphereColors[5];
+            uniform vec3 reflectiveColors[5];
+            uniform highp int numPlanes;
+            uniform float planeOffsets[5];
+            uniform vec3 planeNormals[5];
+            uniform vec3 planeColors[5];
+            uniform highp int rayBounces;
             uniform vec3 ambientLight;
             uniform bool enableGI;
             uniform bool enableRefGI;
-            uniform int indirectSamples;
-            
-            varying lowp vec3 origin;
-            varying lowp vec3 ray;
-            
-            #define quadratic_attenuation 0.1
-            #define linear_attenuation 0.4
-            #define constant_attenuation 0.0
-            #define specular_exponent 32.0
-            #define EPSILON 0.001
-            #define PI 3.141593
-            float randomSeed = 0.1;
-            
-            // https://stackoverflow.com/a/10625698
-            float random( vec2 p ) {
-                vec2 K1 = vec2(
-                    23.14069263277926, // e^pi (Gelfond's constant)
-                     2.665144142690225 // 2^sqrt(2) (Gelfondâ€“Schneider constant)
-                );
-                randomSeed += 0.02; // increment, so that each access gets different value
-                return fract( cos( dot(p+randomSeed,K1) ) * 12345.6789 );
-            }
-            
-            float modulo(float a, float b) {
-                return (a)-(floor((a)/(b))*(b));
-            }
-            
-            bool intersectSphere(vec3 ray_origin, vec3 ray_direction, vec3 center, float radius, float tmin, inout float t_hit) {
-                vec3 tmp = center - ray_origin;
-                vec3 dir = ray_direction;
-            
-                float A = dot(dir, dir);
-                float B = - 2.0 * dot(dir, tmp);
-                float C = dot(tmp, tmp) - pow(radius, 2.0);
-                float radical = B*B - 4.0*A*C;
-                if (radical < 0.0)
-                    return false;
-            
-                radical = sqrt(radical);
-                float t_m = ( -B - radical ) / ( 2.0 * A );
-                float t_p = ( -B + radical ) / ( 2.0 * A );
-                vec3 pt_m = ray_origin + ray_direction * t_m;
-                vec3 pt_p = ray_origin + ray_direction * t_p;
-            
-                float t = (t_m < tmin) ? t_p : t_m;
-                if (t < t_hit && t > tmin) {
-                    t_hit = t;
-                    return true;
-                }
-                return false;
-            }
-            
-            bool intersectPlane(vec3 ray_origin, vec3 ray_direction, float offset, vec3 normal, vec3 center, vec2 size, float tmin, inout float t_hit) {
-                vec3 normal_offset = normal * offset;
-                float d = normal_offset.x + normal_offset.y + normal_offset.z;
-                float t = (d - dot(normal, ray_origin)) / dot(normal, ray_direction);
-                
-                if (t < t_hit && t > tmin) {
-                    vec3 tmpPos = ray_origin + ray_direction * t;
-                    if (length(size) == 0.0 || (
-                        tmpPos.x < center.x + size.x*0.5 &&
-                        tmpPos.x > center.x - size.x*0.5 &&
-                        tmpPos.z < center.z + size.y*0.5 &&
-                        tmpPos.z > center.z - size.y*0.5)) {
-                        t_hit = t;
-                        return true;
-                    }
-                }
-                return false;
-            }
-            
-            bool intersect(vec3 ray_origin,
-                        vec3 ray_direction,
-                        inout float t_hit,
-                        float tmin,
-                        out vec3 position,
-                        out vec3 normal,
-                        out vec3 diffuseColor,
-                        out vec3 specularColor,
-                        out vec3 reflectiveColor,
-                        inout bool isLight)
+            uniform highp int indirectSamples;
+            in lowp vec3 origin;
+            in lowp vec3 ray;
+            out lowp vec4 fragColor;
+            void main ()
             {
-                bool intersected = false;
-            
-                // Intersect spheres
-                for (int i = 0; i < MAX_SPHERES; i++) {
-                    if (i >= numSpheres) break;
-                    vec3 center = sphereCenters[i];
-                    bool tmp = intersectSphere(ray_origin, ray_direction, center, 0.8, tmin, t_hit);
-                    if (tmp) {
-                        position = ray_origin + ray_direction * t_hit;
-                        normal = normalize(position - center);
-                        diffuseColor = sphereColors[i];
-                        specularColor = vec3(1.0, 1.0, 1.0);
-                        reflectiveColor = reflectiveColors[i];
-                        intersected = true;
-                    }
-                }
-            
-                // Intersect planes
-                for (int i = 0; i < MAX_PLANES; i++) {
-                    if (i >= numPlanes) break;
-                    vec3 planeNormal = planeNormals[i];
-                    bool tmp = intersectPlane(ray_origin, ray_direction, planeOffsets[i], planeNormal, vec3(0,0,0), vec2(0,0), tmin, t_hit);
-                    if (tmp) {
-                        position = ray_origin + ray_direction * t_hit;
-                        normal = planeNormal;
-                        diffuseColor = planeColors[i];
-                        specularColor = vec3(0.5, 0.5, 0.5);
-                        reflectiveColor =vec3(0.0, 0.0, 0.0);
-                        intersected = true;
-                    }
-                }
-            
-                // Intersect lights to make them visible
-                for (int i = 0; i < MAX_LIGHTS; i++) {
-                    if (i >= numLights) break;
-                    vec3 center = lightPos[i];
-                    vec2 size = lightSize[i];
-                    bool tmp = false;
-                    if (length(size) > 0.0)
-                        tmp = intersectPlane(ray_origin, ray_direction, center.y, vec3(0,1,0), center, size, tmin, t_hit);
-                    else
-                        tmp = intersectSphere(ray_origin, ray_direction, center, 0.1, tmin, t_hit);
-                    if (tmp) {
-                        diffuseColor = lightIntensity[i];
-                        intersected = true;
-                        isLight = true;
-                    }
-                }
-            
-                return intersected;
-            }
-            
-            // Faster intersect function for shadows
-            bool intersectShadowRay(vec3 ray_origin, vec3 ray_direction, inout float t_hit, float tmin) {
-                for (int i = 0; i < MAX_SPHERES; i++) {
-                    if (i >= numSpheres) break;
-                    vec3 center = sphereCenters[i];
-                    if (intersectSphere(ray_origin, ray_direction, center, 0.8, tmin, t_hit))
-                        return true;
-                }
-                for (int i = 0; i < MAX_PLANES; i++) {
-                    if (i >= numPlanes) break;
-                    float planeOffset = planeOffsets[i];
-                    vec3 planeNormal = planeNormals[i];
-                    if (intersectPlane(ray_origin, ray_direction, planeOffset, planeNormal, vec3(0,0,0), vec2(0,0), tmin, t_hit))
-                        return true;
-                }
-                return false;
-            }
-            
-            void getIncidentIntensity(vec3 p, vec3 position, vec3 intensity, vec2 size, float sample_i, out float light_distance, out vec3 vec_to_light, out vec3 incident_intensity) {
-                if (length(size) > 0.0) {
-                    // Get jittered position on the light plane
-                    float inv_dim = 1.0 / shadowDim;
-                    float cell_sizeX = size.x * inv_dim;
-                    float cell_sizeY = size.y * inv_dim;
-                    float xGrid = floor(modulo(sample_i, shadowDim));
-                    float yGrid = floor(sample_i * inv_dim);
-                    float posX = cell_sizeX * (xGrid + random(p.xy));
-                    float posY = cell_sizeY * (yGrid + random(p.yx));
-                    float x = position.x - size.x*0.5 + posX;
-                    float z = position.z - size.y*0.5 + posY;
-                    vec_to_light = vec3(x, position.y, z) - p;
+              randomSeed = 0.1;
+              lowp vec3 pixelColor_1;
+              lowp vec3 tmpvar_2;
+              tmpvar_2 = normalize(ray);
+              lowp vec3 ray_origin_3;
+              ray_origin_3 = origin;
+              lowp vec3 ray_direction_4;
+              ray_direction_4 = tmpvar_2;
+              lowp float t_hit_5;
+              t_hit_5 = sqrt(dot (ray, ray));
+              lowp vec3 position_6;
+              lowp vec3 normal_7;
+              vec3 diffuseColor_8;
+              vec3 specularColor_9;
+              vec3 reflectiveColor_10;
+              bool isLight_11;
+              isLight_11 = bool(0);
+              highp int i_12;
+              i_12 = 0;
+              while (true) {
+                if ((i_12 >= 5)) {
+                  break;
+                };
+                if ((i_12 >= numSpheres)) {
+                  break;
+                };
+                vec3 tmpvar_13;
+                tmpvar_13 = sphereCenters[i_12];
+                lowp float t_hit_14;
+                t_hit_14 = t_hit_5;
+                bool tmpvar_15;
+                lowp vec3 tmpvar_16;
+                tmpvar_16 = (tmpvar_13 - ray_origin_3);
+                lowp float tmpvar_17;
+                tmpvar_17 = dot (ray_direction_4, ray_direction_4);
+                lowp float tmpvar_18;
+                tmpvar_18 = (-2.0 * dot (ray_direction_4, tmpvar_16));
+                lowp float tmpvar_19;
+                tmpvar_19 = ((tmpvar_18 * tmpvar_18) - ((4.0 * tmpvar_17) * (
+                  dot (tmpvar_16, tmpvar_16)
+                 - 0.64)));
+                if ((tmpvar_19 < 0.0)) {
+                  tmpvar_15 = bool(0);
                 } else {
-                    vec_to_light = position - p; // point light
-                }
-                
-                light_distance = length(vec_to_light);
-                float attenuation = 1.0 / (quadratic_attenuation*pow(light_distance, 2.0) + linear_attenuation*light_distance + constant_attenuation);
-                
-                vec_to_light = normalize(vec_to_light);
-                incident_intensity = intensity * attenuation;
+                  lowp float tmpvar_20;
+                  tmpvar_20 = sqrt(tmpvar_19);
+                  lowp float tmpvar_21;
+                  tmpvar_21 = ((-(tmpvar_18) - tmpvar_20) / (2.0 * tmpvar_17));
+                  lowp float tmpvar_22;
+                  tmpvar_22 = ((-(tmpvar_18) + tmpvar_20) / (2.0 * tmpvar_17));
+                  lowp float tmpvar_23;
+                  if ((tmpvar_21 < 0.0)) {
+                    tmpvar_23 = tmpvar_22;
+                  } else {
+                    tmpvar_23 = tmpvar_21;
+                  };
+                  if (((tmpvar_23 < t_hit_5) && (tmpvar_23 > 0.0))) {
+                    t_hit_14 = tmpvar_23;
+                    tmpvar_15 = bool(1);
+                  } else {
+                    tmpvar_15 = bool(0);
+                  };
+                };
+                t_hit_5 = t_hit_14;
+                if (tmpvar_15) {
+                  position_6 = (ray_origin_3 + (ray_direction_4 * t_hit_14));
+                  normal_7 = normalize((position_6 - tmpvar_13));
+                  diffuseColor_8 = sphereColors[i_12];
+                  specularColor_9 = vec3(1.0, 1.0, 1.0);
+                  reflectiveColor_10 = reflectiveColors[i_12];
+                };
+                i_12++;
+              };
+              if ((0 < numPlanes)) {
+                lowp vec3 tmpvar_24;
+                tmpvar_24 = planeNormals[0];
+                lowp float t_hit_25;
+                t_hit_25 = t_hit_5;
+                bool tmpvar_26;
+                tmpvar_26 = bool(1);
+                bool tmpvar_27;
+                lowp vec3 tmpvar_28;
+                tmpvar_28 = (tmpvar_24 * planeOffsets[0]);
+                lowp float tmpvar_29;
+                tmpvar_29 = (((
+                  (tmpvar_28.x + tmpvar_28.y)
+                 + tmpvar_28.z) - dot (tmpvar_24, origin)) / dot (tmpvar_24, tmpvar_2));
+                if (((tmpvar_29 < t_hit_5) && (tmpvar_29 > 0.0))) {
+                  t_hit_25 = tmpvar_29;
+                  tmpvar_27 = bool(1);
+                  tmpvar_26 = bool(0);
+                };
+                if (tmpvar_26) {
+                  tmpvar_27 = bool(0);
+                  tmpvar_26 = bool(0);
+                };
+                t_hit_5 = t_hit_25;
+                if (tmpvar_27) {
+                  position_6 = (origin + (tmpvar_2 * t_hit_25));
+                  normal_7 = tmpvar_24;
+                  diffuseColor_8 = planeColors[0];
+                  specularColor_9 = vec3(0.5, 0.5, 0.5);
+                  reflectiveColor_10 = vec3(0.0, 0.0, 0.0);
+                };
+                if ((1 < numPlanes)) {
+                  lowp vec3 tmpvar_30;
+                  tmpvar_30 = planeNormals[1];
+                  lowp float t_hit_31;
+                  t_hit_31 = t_hit_25;
+                  bool tmpvar_32;
+                  tmpvar_32 = bool(1);
+                  bool tmpvar_33;
+                  lowp vec3 tmpvar_34;
+                  tmpvar_34 = (tmpvar_30 * planeOffsets[1]);
+                  lowp float tmpvar_35;
+                  tmpvar_35 = (((
+                    (tmpvar_34.x + tmpvar_34.y)
+                   + tmpvar_34.z) - dot (tmpvar_30, origin)) / dot (tmpvar_30, tmpvar_2));
+                  if (((tmpvar_35 < t_hit_25) && (tmpvar_35 > 0.0))) {
+                    t_hit_31 = tmpvar_35;
+                    tmpvar_33 = bool(1);
+                    tmpvar_32 = bool(0);
+                  };
+                  if (tmpvar_32) {
+                    tmpvar_33 = bool(0);
+                    tmpvar_32 = bool(0);
+                  };
+                  t_hit_5 = t_hit_31;
+                  if (tmpvar_33) {
+                    position_6 = (origin + (tmpvar_2 * t_hit_31));
+                    normal_7 = tmpvar_30;
+                    diffuseColor_8 = planeColors[1];
+                    specularColor_9 = vec3(0.5, 0.5, 0.5);
+                    reflectiveColor_10 = vec3(0.0, 0.0, 0.0);
+                  };
+                  if ((2 < numPlanes)) {
+                    lowp vec3 tmpvar_36;
+                    tmpvar_36 = planeNormals[2];
+                    lowp float t_hit_37;
+                    t_hit_37 = t_hit_31;
+                    bool tmpvar_38;
+                    tmpvar_38 = bool(1);
+                    bool tmpvar_39;
+                    lowp vec3 tmpvar_40;
+                    tmpvar_40 = (tmpvar_36 * planeOffsets[2]);
+                    lowp float tmpvar_41;
+                    tmpvar_41 = (((
+                      (tmpvar_40.x + tmpvar_40.y)
+                     + tmpvar_40.z) - dot (tmpvar_36, origin)) / dot (tmpvar_36, tmpvar_2));
+                    if (((tmpvar_41 < t_hit_31) && (tmpvar_41 > 0.0))) {
+                      t_hit_37 = tmpvar_41;
+                      tmpvar_39 = bool(1);
+                      tmpvar_38 = bool(0);
+                    };
+                    if (tmpvar_38) {
+                      tmpvar_39 = bool(0);
+                      tmpvar_38 = bool(0);
+                    };
+                    t_hit_5 = t_hit_37;
+                    if (tmpvar_39) {
+                      position_6 = (origin + (tmpvar_2 * t_hit_37));
+                      normal_7 = tmpvar_36;
+                      diffuseColor_8 = planeColors[2];
+                      specularColor_9 = vec3(0.5, 0.5, 0.5);
+                      reflectiveColor_10 = vec3(0.0, 0.0, 0.0);
+                    };
+                    if ((3 < numPlanes)) {
+                      lowp vec3 tmpvar_42;
+                      tmpvar_42 = planeNormals[3];
+                      lowp float t_hit_43;
+                      t_hit_43 = t_hit_37;
+                      bool tmpvar_44;
+                      tmpvar_44 = bool(1);
+                      bool tmpvar_45;
+                      lowp vec3 tmpvar_46;
+                      tmpvar_46 = (tmpvar_42 * planeOffsets[3]);
+                      lowp float tmpvar_47;
+                      tmpvar_47 = (((
+                        (tmpvar_46.x + tmpvar_46.y)
+                       + tmpvar_46.z) - dot (tmpvar_42, origin)) / dot (tmpvar_42, tmpvar_2));
+                      if (((tmpvar_47 < t_hit_37) && (tmpvar_47 > 0.0))) {
+                        t_hit_43 = tmpvar_47;
+                        tmpvar_45 = bool(1);
+                        tmpvar_44 = bool(0);
+                      };
+                      if (tmpvar_44) {
+                        tmpvar_45 = bool(0);
+                        tmpvar_44 = bool(0);
+                      };
+                      t_hit_5 = t_hit_43;
+                      if (tmpvar_45) {
+                        position_6 = (origin + (tmpvar_2 * t_hit_43));
+                        normal_7 = tmpvar_42;
+                        diffuseColor_8 = planeColors[3];
+                        specularColor_9 = vec3(0.5, 0.5, 0.5);
+                        reflectiveColor_10 = vec3(0.0, 0.0, 0.0);
+                      };
+                      if ((4 < numPlanes)) {
+                        lowp vec3 tmpvar_48;
+                        tmpvar_48 = planeNormals[4];
+                        lowp float t_hit_49;
+                        t_hit_49 = t_hit_43;
+                        bool tmpvar_50;
+                        tmpvar_50 = bool(1);
+                        bool tmpvar_51;
+                        lowp vec3 tmpvar_52;
+                        tmpvar_52 = (tmpvar_48 * planeOffsets[4]);
+                        lowp float tmpvar_53;
+                        tmpvar_53 = (((
+                          (tmpvar_52.x + tmpvar_52.y)
+                         + tmpvar_52.z) - dot (tmpvar_48, origin)) / dot (tmpvar_48, tmpvar_2));
+                        if (((tmpvar_53 < t_hit_43) && (tmpvar_53 > 0.0))) {
+                          t_hit_49 = tmpvar_53;
+                          tmpvar_51 = bool(1);
+                          tmpvar_50 = bool(0);
+                        };
+                        if (tmpvar_50) {
+                          tmpvar_51 = bool(0);
+                          tmpvar_50 = bool(0);
+                        };
+                        t_hit_5 = t_hit_49;
+                        if (tmpvar_51) {
+                          position_6 = (origin + (tmpvar_2 * t_hit_49));
+                          normal_7 = tmpvar_48;
+                          diffuseColor_8 = planeColors[4];
+                          specularColor_9 = vec3(0.5, 0.5, 0.5);
+                          reflectiveColor_10 = vec3(0.0, 0.0, 0.0);
+                        };
+                      };
+                    };
+                  };
+                };
+              };
+              bool tmp_54;
+              if ((0 < numLights)) {
+                vec3 tmpvar_55;
+                tmpvar_55 = lightPos[0];
+                vec2 tmpvar_56;
+                tmpvar_56 = lightSize[0];
+                tmp_54 = bool(0);
+                float tmpvar_57;
+                tmpvar_57 = sqrt(dot (tmpvar_56, tmpvar_56));
+                if ((tmpvar_57 > 0.0)) {
+                  lowp float t_hit_58;
+                  t_hit_58 = t_hit_5;
+                  bool tmpvar_59;
+                  tmpvar_59 = bool(1);
+                  bool tmpvar_60;
+                  vec3 tmpvar_61;
+                  tmpvar_61 = (vec3(0.0, 1.0, 0.0) * tmpvar_55.y);
+                  lowp float tmpvar_62;
+                  tmpvar_62 = (((
+                    (tmpvar_61.x + tmpvar_61.y)
+                   + tmpvar_61.z) - origin.y) / tmpvar_2.y);
+                  if (((tmpvar_62 < t_hit_5) && (tmpvar_62 > 0.0))) {
+                    lowp vec3 tmpvar_63;
+                    tmpvar_63 = (origin + (tmpvar_2 * tmpvar_62));
+                    float tmpvar_64;
+                    tmpvar_64 = sqrt(dot (tmpvar_56, tmpvar_56));
+                    if (((tmpvar_64 == 0.0) || ((
+                      ((tmpvar_63.x < (tmpvar_55.x + (tmpvar_56.x * 0.5))) && (tmpvar_63.x > (tmpvar_55.x - (tmpvar_56.x * 0.5))))
+                     && 
+                      (tmpvar_63.z < (tmpvar_55.z + (tmpvar_56.y * 0.5)))
+                    ) && (tmpvar_63.z > 
+                      (tmpvar_55.z - (tmpvar_56.y * 0.5))
+                    )))) {
+                      t_hit_58 = tmpvar_62;
+                      tmpvar_60 = bool(1);
+                      tmpvar_59 = bool(0);
+                    };
+                  };
+                  if (tmpvar_59) {
+                    tmpvar_60 = bool(0);
+                    tmpvar_59 = bool(0);
+                  };
+                  t_hit_5 = t_hit_58;
+                  tmp_54 = tmpvar_60;
+                } else {
+                  lowp float t_hit_65;
+                  t_hit_65 = t_hit_5;
+                  bool tmpvar_66;
+                  lowp vec3 tmpvar_67;
+                  tmpvar_67 = (tmpvar_55 - origin);
+                  lowp float tmpvar_68;
+                  tmpvar_68 = dot (tmpvar_2, tmpvar_2);
+                  lowp float tmpvar_69;
+                  tmpvar_69 = (-2.0 * dot (tmpvar_2, tmpvar_67));
+                  lowp float tmpvar_70;
+                  tmpvar_70 = ((tmpvar_69 * tmpvar_69) - ((4.0 * tmpvar_68) * (
+                    dot (tmpvar_67, tmpvar_67)
+                   - 0.01)));
+                  if ((tmpvar_70 < 0.0)) {
+                    tmpvar_66 = bool(0);
+                  } else {
+                    lowp float tmpvar_71;
+                    tmpvar_71 = sqrt(tmpvar_70);
+                    lowp float tmpvar_72;
+                    tmpvar_72 = ((-(tmpvar_69) - tmpvar_71) / (2.0 * tmpvar_68));
+                    lowp float tmpvar_73;
+                    tmpvar_73 = ((-(tmpvar_69) + tmpvar_71) / (2.0 * tmpvar_68));
+                    lowp float tmpvar_74;
+                    if ((tmpvar_72 < 0.0)) {
+                      tmpvar_74 = tmpvar_73;
+                    } else {
+                      tmpvar_74 = tmpvar_72;
+                    };
+                    if (((tmpvar_74 < t_hit_5) && (tmpvar_74 > 0.0))) {
+                      t_hit_65 = tmpvar_74;
+                      tmpvar_66 = bool(1);
+                    } else {
+                      tmpvar_66 = bool(0);
+                    };
+                  };
+                  t_hit_5 = t_hit_65;
+                  tmp_54 = tmpvar_66;
+                };
+                if (tmp_54) {
+                  diffuseColor_8 = lightIntensity[0];
+                  isLight_11 = bool(1);
+                };
+                bool tmp_75;
+                if ((1 < numLights)) {
+                  vec3 tmpvar_76;
+                  tmpvar_76 = lightPos[1];
+                  vec2 tmpvar_77;
+                  tmpvar_77 = lightSize[1];
+                  tmp_75 = bool(0);
+                  float tmpvar_78;
+                  tmpvar_78 = sqrt(dot (tmpvar_77, tmpvar_77));
+                  if ((tmpvar_78 > 0.0)) {
+                    lowp float t_hit_79;
+                    t_hit_79 = t_hit_5;
+                    bool tmpvar_80;
+                    tmpvar_80 = bool(1);
+                    bool tmpvar_81;
+                    vec3 tmpvar_82;
+                    tmpvar_82 = (vec3(0.0, 1.0, 0.0) * tmpvar_76.y);
+                    lowp float tmpvar_83;
+                    tmpvar_83 = (((
+                      (tmpvar_82.x + tmpvar_82.y)
+                     + tmpvar_82.z) - origin.y) / tmpvar_2.y);
+                    if (((tmpvar_83 < t_hit_5) && (tmpvar_83 > 0.0))) {
+                      lowp vec3 tmpvar_84;
+                      tmpvar_84 = (origin + (tmpvar_2 * tmpvar_83));
+                      float tmpvar_85;
+                      tmpvar_85 = sqrt(dot (tmpvar_77, tmpvar_77));
+                      if (((tmpvar_85 == 0.0) || ((
+                        ((tmpvar_84.x < (tmpvar_76.x + (tmpvar_77.x * 0.5))) && (tmpvar_84.x > (tmpvar_76.x - (tmpvar_77.x * 0.5))))
+                       && 
+                        (tmpvar_84.z < (tmpvar_76.z + (tmpvar_77.y * 0.5)))
+                      ) && (tmpvar_84.z > 
+                        (tmpvar_76.z - (tmpvar_77.y * 0.5))
+                      )))) {
+                        t_hit_79 = tmpvar_83;
+                        tmpvar_81 = bool(1);
+                        tmpvar_80 = bool(0);
+                      };
+                    };
+                    if (tmpvar_80) {
+                      tmpvar_81 = bool(0);
+                      tmpvar_80 = bool(0);
+                    };
+                    t_hit_5 = t_hit_79;
+                    tmp_75 = tmpvar_81;
+                  } else {
+                    lowp float t_hit_86;
+                    t_hit_86 = t_hit_5;
+                    bool tmpvar_87;
+                    lowp vec3 tmpvar_88;
+                    tmpvar_88 = (tmpvar_76 - origin);
+                    lowp float tmpvar_89;
+                    tmpvar_89 = dot (tmpvar_2, tmpvar_2);
+                    lowp float tmpvar_90;
+                    tmpvar_90 = (-2.0 * dot (tmpvar_2, tmpvar_88));
+                    lowp float tmpvar_91;
+                    tmpvar_91 = ((tmpvar_90 * tmpvar_90) - ((4.0 * tmpvar_89) * (
+                      dot (tmpvar_88, tmpvar_88)
+                     - 0.01)));
+                    if ((tmpvar_91 < 0.0)) {
+                      tmpvar_87 = bool(0);
+                    } else {
+                      lowp float tmpvar_92;
+                      tmpvar_92 = sqrt(tmpvar_91);
+                      lowp float tmpvar_93;
+                      tmpvar_93 = ((-(tmpvar_90) - tmpvar_92) / (2.0 * tmpvar_89));
+                      lowp float tmpvar_94;
+                      tmpvar_94 = ((-(tmpvar_90) + tmpvar_92) / (2.0 * tmpvar_89));
+                      lowp float tmpvar_95;
+                      if ((tmpvar_93 < 0.0)) {
+                        tmpvar_95 = tmpvar_94;
+                      } else {
+                        tmpvar_95 = tmpvar_93;
+                      };
+                      if (((tmpvar_95 < t_hit_5) && (tmpvar_95 > 0.0))) {
+                        t_hit_86 = tmpvar_95;
+                        tmpvar_87 = bool(1);
+                      } else {
+                        tmpvar_87 = bool(0);
+                      };
+                    };
+                    t_hit_5 = t_hit_86;
+                    tmp_75 = tmpvar_87;
+                  };
+                  if (tmp_75) {
+                    diffuseColor_8 = lightIntensity[1];
+                    isLight_11 = bool(1);
+                  };
+                };
+              };
+              if (isLight_11) {
+                lowp vec4 tmpvar_96;
+                tmpvar_96.w = 1.0;
+                tmpvar_96.xyz = diffuseColor_8;
+                fragColor = tmpvar_96;
+                return;
+              };
+              if (!(enableGI)) {
+                pixelColor_1 = (pixelColor_1 + (ambientLight * diffuseColor_8));
+              };
+              lowp vec3 point_97;
+              point_97 = position_6;
+              lowp vec3 ray_dir_98;
+              ray_dir_98 = tmpvar_2;
+              lowp vec3 normal_99;
+              normal_99 = normal_7;
+              vec3 diffuseColor_100;
+              diffuseColor_100 = diffuseColor_8;
+              vec3 specularColor_101;
+              specularColor_101 = specularColor_9;
+              highp int i_102;
+              lowp vec3 illuminationColor_103;
+              i_102 = 0;
+              while (true) {
+                highp int k_104;
+                highp int areaShadowSamples_105;
+                lowp vec3 light_sum_106;
+                if ((i_102 >= 2)) {
+                  break;
+                };
+                if ((i_102 >= numLights)) {
+                  break;
+                };
+                float tmpvar_107;
+                vec2 x_108;
+                x_108 = lightSize[i_102];
+                tmpvar_107 = sqrt(dot (x_108, x_108));
+                highp int tmpvar_109;
+                if ((tmpvar_107 > 0.0)) {
+                  tmpvar_109 = shadowSamples;
+                } else {
+                  tmpvar_109 = 1;
+                };
+                areaShadowSamples_105 = tmpvar_109;
+                k_104 = 0;
+                while (true) {
+                  lowp vec3 incident_intensity_110;
+                  if ((k_104 >= 49)) {
+                    break;
+                  };
+                  if ((k_104 >= areaShadowSamples_105)) {
+                    break;
+                  };
+                  vec3 position_111;
+                  position_111 = lightPos[i_102];
+                  vec3 intensity_112;
+                  intensity_112 = lightIntensity[i_102];
+                  vec2 size_113;
+                  size_113 = lightSize[i_102];
+                  float sample_i_114;
+                  sample_i_114 = float(k_104);
+                  lowp vec3 vec_to_light_115;
+                  float tmpvar_116;
+                  tmpvar_116 = sqrt(dot (size_113, size_113));
+                  if ((tmpvar_116 > 0.0)) {
+                    float tmpvar_117;
+                    tmpvar_117 = (1.0/(shadowDim));
+                    randomSeed += 0.02;
+                    lowp float tmpvar_118;
+                    tmpvar_118 = ((size_113.x * tmpvar_117) * ((float(mod (sample_i_114, shadowDim))) + fract(
+                      (cos(dot ((point_97.xy + randomSeed), vec2(23.14069, 2.665144))) * 12345.68)
+                    )));
+                    randomSeed += 0.02;
+                    lowp vec3 tmpvar_119;
+                    tmpvar_119.x = ((position_111.x - (size_113.x * 0.5)) + tmpvar_118);
+                    tmpvar_119.y = position_111.y;
+                    tmpvar_119.z = ((position_111.z - (size_113.y * 0.5)) + ((size_113.y * tmpvar_117) * (
+                      floor((sample_i_114 * tmpvar_117))
+                     + 
+                      fract((cos(dot (
+                        (point_97.yx + randomSeed)
+                      , vec2(23.14069, 2.665144))) * 12345.68))
+                    )));
+                    vec_to_light_115 = (tmpvar_119 - point_97);
+                  } else {
+                    vec_to_light_115 = (position_111 - point_97);
+                  };
+                  lowp float tmpvar_120;
+                  tmpvar_120 = sqrt(dot (vec_to_light_115, vec_to_light_115));
+                  lowp vec3 tmpvar_121;
+                  tmpvar_121 = normalize(vec_to_light_115);
+                  vec_to_light_115 = tmpvar_121;
+                  incident_intensity_110 = (intensity_112 * (1.0/((
+                    (0.1 * (tmpvar_120 * tmpvar_120))
+                   + 
+                    (0.4 * tmpvar_120)
+                  ))));
+                  lowp vec3 ray_origin_122;
+                  ray_origin_122 = point_97;
+                  lowp vec3 ray_direction_123;
+                  ray_direction_123 = tmpvar_121;
+                  lowp float t_hit_124;
+                  t_hit_124 = tmpvar_120;
+                  bool tmpvar_125;
+                  tmpvar_125 = bool(0);
+                  highp int i_126;
+                  highp int i_127;
+                  i_127 = 0;
+                  while (true) {
+                    if ((i_127 >= 5)) {
+                      break;
+                    };
+                    if ((i_127 >= numSpheres)) {
+                      break;
+                    };
+                    lowp float t_hit_128;
+                    t_hit_128 = t_hit_124;
+                    bool tmpvar_129;
+                    lowp vec3 tmpvar_130;
+                    tmpvar_130 = (sphereCenters[i_127] - ray_origin_122);
+                    lowp float tmpvar_131;
+                    tmpvar_131 = dot (ray_direction_123, ray_direction_123);
+                    lowp float tmpvar_132;
+                    tmpvar_132 = (-2.0 * dot (ray_direction_123, tmpvar_130));
+                    lowp float tmpvar_133;
+                    tmpvar_133 = ((tmpvar_132 * tmpvar_132) - ((4.0 * tmpvar_131) * (
+                      dot (tmpvar_130, tmpvar_130)
+                     - 0.64)));
+                    if ((tmpvar_133 < 0.0)) {
+                      tmpvar_129 = bool(0);
+                    } else {
+                      lowp float tmpvar_134;
+                      tmpvar_134 = sqrt(tmpvar_133);
+                      lowp float tmpvar_135;
+                      tmpvar_135 = ((-(tmpvar_132) - tmpvar_134) / (2.0 * tmpvar_131));
+                      lowp float tmpvar_136;
+                      tmpvar_136 = ((-(tmpvar_132) + tmpvar_134) / (2.0 * tmpvar_131));
+                      lowp float tmpvar_137;
+                      if ((tmpvar_135 < 0.01)) {
+                        tmpvar_137 = tmpvar_136;
+                      } else {
+                        tmpvar_137 = tmpvar_135;
+                      };
+                      if (((tmpvar_137 < t_hit_124) && (tmpvar_137 > 0.01))) {
+                        t_hit_128 = tmpvar_137;
+                        tmpvar_129 = bool(1);
+                      } else {
+                        tmpvar_129 = bool(0);
+                      };
+                    };
+                    t_hit_124 = t_hit_128;
+                    if (tmpvar_129) {
+                      tmpvar_125 = bool(1);
+                      break;
+                    };
+                    i_127++;
+                  };
+                  if (!(tmpvar_125)) {
+                    i_126 = 0;
+                    while (true) {
+                      if ((i_126 >= 5)) {
+                        break;
+                      };
+                      if ((i_126 >= numPlanes)) {
+                        break;
+                      };
+                      vec3 normal_138;
+                      normal_138 = planeNormals[i_126];
+                      lowp float t_hit_139;
+                      t_hit_139 = t_hit_124;
+                      bool tmpvar_140;
+                      tmpvar_140 = bool(1);
+                      bool tmpvar_141;
+                      vec3 tmpvar_142;
+                      tmpvar_142 = (normal_138 * planeOffsets[i_126]);
+                      lowp float tmpvar_143;
+                      tmpvar_143 = (((
+                        (tmpvar_142.x + tmpvar_142.y)
+                       + tmpvar_142.z) - dot (normal_138, ray_origin_122)) / dot (normal_138, ray_direction_123));
+                      if (((tmpvar_143 < t_hit_124) && (tmpvar_143 > 0.01))) {
+                        t_hit_139 = tmpvar_143;
+                        tmpvar_141 = bool(1);
+                        tmpvar_140 = bool(0);
+                      };
+                      if (tmpvar_140) {
+                        tmpvar_141 = bool(0);
+                        tmpvar_140 = bool(0);
+                      };
+                      t_hit_124 = t_hit_139;
+                      if (tmpvar_141) {
+                        tmpvar_125 = bool(1);
+                        break;
+                      };
+                      i_126++;
+                    };
+                    if (!(tmpvar_125)) {
+                      tmpvar_125 = bool(1);
+                    };
+                  };
+                  lowp float tmpvar_144;
+                  tmpvar_144 = abs((t_hit_124 - tmpvar_120));
+                  if ((tmpvar_144 < 0.001)) {
+                    lowp vec3 specular_145;
+                    lowp vec3 tmpvar_146;
+                    tmpvar_146 = (incident_intensity_110 * max (0.0, dot (normal_99, tmpvar_121)));
+                    lowp float tmpvar_147;
+                    tmpvar_147 = dot (normal_99, tmpvar_121);
+                    if ((tmpvar_147 > 0.0)) {
+                      specular_145 = (specularColor_101 * pow (max (0.0, 
+                        dot ((-(tmpvar_121) - ((2.0 * 
+                          dot (-(tmpvar_121), normal_99)
+                        ) * normal_99)), -(ray_dir_98))
+                      ), 32.0));
+                    };
+                    light_sum_106 = (light_sum_106 + (tmpvar_146 * (diffuseColor_100 + specular_145)));
+                  };
+                  k_104++;
+                };
+                illuminationColor_103 = (illuminationColor_103 + (light_sum_106 / float(tmpvar_109)));
+                i_102++;
+              };
+              pixelColor_1 = (pixelColor_1 + illuminationColor_103);
+              if (enableGI) {
+                lowp vec3 point_148;
+                point_148 = position_6;
+                lowp vec3 tmpvar_149;
+                highp int k_150;
+                lowp vec3 indirect_sampling_sum_151;
+                lowp mat3 transform_152;
+                float tmpvar_153;
+                tmpvar_153 = sqrt(dot (diffuseColor_8, diffuseColor_8));
+                if ((tmpvar_153 == 0.0)) {
+                  tmpvar_149 = vec3(0.0, 0.0, 0.0);
+                } else {
+                  lowp float tmpvar_154;
+                  tmpvar_154 = abs(normal_7.x);
+                  lowp float tmpvar_155;
+                  tmpvar_155 = abs(normal_7.y);
+                  if ((tmpvar_154 > tmpvar_155)) {
+                    lowp vec3 tmpvar_156;
+                    tmpvar_156.y = 0.0;
+                    tmpvar_156.x = normal_7.z;
+                    tmpvar_156.z = -(normal_7.x);
+                    transform_152[2] = (tmpvar_156 / sqrt((
+                      (normal_7.x * normal_7.x)
+                     + 
+                      (normal_7.z * normal_7.z)
+                    )));
+                  } else {
+                    lowp vec3 tmpvar_157;
+                    tmpvar_157.x = 0.0;
+                    tmpvar_157.y = -(normal_7.z);
+                    tmpvar_157.z = normal_7.y;
+                    transform_152[2] = (tmpvar_157 / sqrt((
+                      (normal_7.y * normal_7.y)
+                     + 
+                      (normal_7.z * normal_7.z)
+                    )));
+                  };
+                  lowp vec3 b_158;
+                  b_158 = transform_152[2];
+                  transform_152[0] = ((normal_7.yzx * b_158.zxy) - (normal_7.zxy * b_158.yzx));
+                  transform_152[1] = normal_7;
+                  k_150 = 0;
+                  while (true) {
+                    if ((k_150 >= 100)) {
+                      break;
+                    };
+                    if ((k_150 >= indirectSamples)) {
+                      break;
+                    };
+                    randomSeed += 0.02;
+                    lowp float tmpvar_159;
+                    tmpvar_159 = fract((cos(
+                      dot ((point_148.xy + randomSeed), vec2(23.14069, 2.665144))
+                    ) * 12345.68));
+                    lowp float tmpvar_160;
+                    tmpvar_160 = sqrt((1.0 - (tmpvar_159 * tmpvar_159)));
+                    randomSeed += 0.02;
+                    lowp float tmpvar_161;
+                    tmpvar_161 = (6.283186 * fract((
+                      cos(dot ((point_148.yx + randomSeed), vec2(23.14069, 2.665144)))
+                     * 12345.68)));
+                    lowp vec3 tmpvar_162;
+                    tmpvar_162.x = (cos(tmpvar_161) * tmpvar_160);
+                    tmpvar_162.y = tmpvar_159;
+                    tmpvar_162.z = (sin(tmpvar_161) * tmpvar_160);
+                    lowp vec3 tmpvar_163;
+                    tmpvar_163 = (transform_152 * tmpvar_162);
+                    lowp vec3 ray_origin_164;
+                    ray_origin_164 = point_148;
+                    lowp vec3 ray_direction_165;
+                    ray_direction_165 = tmpvar_163;
+                    lowp float t_hit_166;
+                    t_hit_166 = 10.0;
+                    lowp vec3 position_167;
+                    lowp vec3 normal_168;
+                    vec3 diffuseColor_169;
+                    vec3 specularColor_170;
+                    bool isLight_171;
+                    isLight_171 = bool(0);
+                    highp int i_172;
+                    i_172 = 0;
+                    while (true) {
+                      if ((i_172 >= 5)) {
+                        break;
+                      };
+                      if ((i_172 >= numSpheres)) {
+                        break;
+                      };
+                      vec3 tmpvar_173;
+                      tmpvar_173 = sphereCenters[i_172];
+                      lowp float t_hit_174;
+                      t_hit_174 = t_hit_166;
+                      bool tmpvar_175;
+                      lowp vec3 tmpvar_176;
+                      tmpvar_176 = (tmpvar_173 - ray_origin_164);
+                      lowp float tmpvar_177;
+                      tmpvar_177 = dot (ray_direction_165, ray_direction_165);
+                      lowp float tmpvar_178;
+                      tmpvar_178 = (-2.0 * dot (ray_direction_165, tmpvar_176));
+                      lowp float tmpvar_179;
+                      tmpvar_179 = ((tmpvar_178 * tmpvar_178) - ((4.0 * tmpvar_177) * (
+                        dot (tmpvar_176, tmpvar_176)
+                       - 0.64)));
+                      if ((tmpvar_179 < 0.0)) {
+                        tmpvar_175 = bool(0);
+                      } else {
+                        lowp float tmpvar_180;
+                        tmpvar_180 = sqrt(tmpvar_179);
+                        lowp float tmpvar_181;
+                        tmpvar_181 = ((-(tmpvar_178) - tmpvar_180) / (2.0 * tmpvar_177));
+                        lowp float tmpvar_182;
+                        tmpvar_182 = ((-(tmpvar_178) + tmpvar_180) / (2.0 * tmpvar_177));
+                        lowp float tmpvar_183;
+                        if ((tmpvar_181 < 0.01)) {
+                          tmpvar_183 = tmpvar_182;
+                        } else {
+                          tmpvar_183 = tmpvar_181;
+                        };
+                        if (((tmpvar_183 < t_hit_166) && (tmpvar_183 > 0.01))) {
+                          t_hit_174 = tmpvar_183;
+                          tmpvar_175 = bool(1);
+                        } else {
+                          tmpvar_175 = bool(0);
+                        };
+                      };
+                      t_hit_166 = t_hit_174;
+                      if (tmpvar_175) {
+                        position_167 = (ray_origin_164 + (ray_direction_165 * t_hit_174));
+                        normal_168 = normalize((position_167 - tmpvar_173));
+                        diffuseColor_169 = sphereColors[i_172];
+                        specularColor_170 = vec3(1.0, 1.0, 1.0);
+                      };
+                      i_172++;
+                    };
+                    if ((0 < numPlanes)) {
+                      lowp vec3 tmpvar_184;
+                      tmpvar_184 = planeNormals[0];
+                      lowp float t_hit_185;
+                      t_hit_185 = t_hit_166;
+                      bool tmpvar_186;
+                      tmpvar_186 = bool(1);
+                      bool tmpvar_187;
+                      lowp vec3 tmpvar_188;
+                      tmpvar_188 = (tmpvar_184 * planeOffsets[0]);
+                      lowp float tmpvar_189;
+                      tmpvar_189 = (((
+                        (tmpvar_188.x + tmpvar_188.y)
+                       + tmpvar_188.z) - dot (tmpvar_184, point_148)) / dot (tmpvar_184, tmpvar_163));
+                      if (((tmpvar_189 < t_hit_166) && (tmpvar_189 > 0.01))) {
+                        t_hit_185 = tmpvar_189;
+                        tmpvar_187 = bool(1);
+                        tmpvar_186 = bool(0);
+                      };
+                      if (tmpvar_186) {
+                        tmpvar_187 = bool(0);
+                        tmpvar_186 = bool(0);
+                      };
+                      t_hit_166 = t_hit_185;
+                      if (tmpvar_187) {
+                        position_167 = (point_148 + (tmpvar_163 * t_hit_185));
+                        normal_168 = tmpvar_184;
+                        diffuseColor_169 = planeColors[0];
+                        specularColor_170 = vec3(0.5, 0.5, 0.5);
+                      };
+                      if ((1 < numPlanes)) {
+                        lowp vec3 tmpvar_190;
+                        tmpvar_190 = planeNormals[1];
+                        lowp float t_hit_191;
+                        t_hit_191 = t_hit_185;
+                        bool tmpvar_192;
+                        tmpvar_192 = bool(1);
+                        bool tmpvar_193;
+                        lowp vec3 tmpvar_194;
+                        tmpvar_194 = (tmpvar_190 * planeOffsets[1]);
+                        lowp float tmpvar_195;
+                        tmpvar_195 = (((
+                          (tmpvar_194.x + tmpvar_194.y)
+                         + tmpvar_194.z) - dot (tmpvar_190, point_148)) / dot (tmpvar_190, tmpvar_163));
+                        if (((tmpvar_195 < t_hit_185) && (tmpvar_195 > 0.01))) {
+                          t_hit_191 = tmpvar_195;
+                          tmpvar_193 = bool(1);
+                          tmpvar_192 = bool(0);
+                        };
+                        if (tmpvar_192) {
+                          tmpvar_193 = bool(0);
+                          tmpvar_192 = bool(0);
+                        };
+                        t_hit_166 = t_hit_191;
+                        if (tmpvar_193) {
+                          position_167 = (point_148 + (tmpvar_163 * t_hit_191));
+                          normal_168 = tmpvar_190;
+                          diffuseColor_169 = planeColors[1];
+                          specularColor_170 = vec3(0.5, 0.5, 0.5);
+                        };
+                        if ((2 < numPlanes)) {
+                          lowp vec3 tmpvar_196;
+                          tmpvar_196 = planeNormals[2];
+                          lowp float t_hit_197;
+                          t_hit_197 = t_hit_191;
+                          bool tmpvar_198;
+                          tmpvar_198 = bool(1);
+                          bool tmpvar_199;
+                          lowp vec3 tmpvar_200;
+                          tmpvar_200 = (tmpvar_196 * planeOffsets[2]);
+                          lowp float tmpvar_201;
+                          tmpvar_201 = (((
+                            (tmpvar_200.x + tmpvar_200.y)
+                           + tmpvar_200.z) - dot (tmpvar_196, point_148)) / dot (tmpvar_196, tmpvar_163));
+                          if (((tmpvar_201 < t_hit_191) && (tmpvar_201 > 0.01))) {
+                            t_hit_197 = tmpvar_201;
+                            tmpvar_199 = bool(1);
+                            tmpvar_198 = bool(0);
+                          };
+                          if (tmpvar_198) {
+                            tmpvar_199 = bool(0);
+                            tmpvar_198 = bool(0);
+                          };
+                          t_hit_166 = t_hit_197;
+                          if (tmpvar_199) {
+                            position_167 = (point_148 + (tmpvar_163 * t_hit_197));
+                            normal_168 = tmpvar_196;
+                            diffuseColor_169 = planeColors[2];
+                            specularColor_170 = vec3(0.5, 0.5, 0.5);
+                          };
+                          if ((3 < numPlanes)) {
+                            lowp vec3 tmpvar_202;
+                            tmpvar_202 = planeNormals[3];
+                            lowp float t_hit_203;
+                            t_hit_203 = t_hit_197;
+                            bool tmpvar_204;
+                            tmpvar_204 = bool(1);
+                            bool tmpvar_205;
+                            lowp vec3 tmpvar_206;
+                            tmpvar_206 = (tmpvar_202 * planeOffsets[3]);
+                            lowp float tmpvar_207;
+                            tmpvar_207 = (((
+                              (tmpvar_206.x + tmpvar_206.y)
+                             + tmpvar_206.z) - dot (tmpvar_202, point_148)) / dot (tmpvar_202, tmpvar_163));
+                            if (((tmpvar_207 < t_hit_197) && (tmpvar_207 > 0.01))) {
+                              t_hit_203 = tmpvar_207;
+                              tmpvar_205 = bool(1);
+                              tmpvar_204 = bool(0);
+                            };
+                            if (tmpvar_204) {
+                              tmpvar_205 = bool(0);
+                              tmpvar_204 = bool(0);
+                            };
+                            t_hit_166 = t_hit_203;
+                            if (tmpvar_205) {
+                              position_167 = (point_148 + (tmpvar_163 * t_hit_203));
+                              normal_168 = tmpvar_202;
+                              diffuseColor_169 = planeColors[3];
+                              specularColor_170 = vec3(0.5, 0.5, 0.5);
+                            };
+                            if ((4 < numPlanes)) {
+                              lowp vec3 tmpvar_208;
+                              tmpvar_208 = planeNormals[4];
+                              lowp float t_hit_209;
+                              t_hit_209 = t_hit_203;
+                              bool tmpvar_210;
+                              tmpvar_210 = bool(1);
+                              bool tmpvar_211;
+                              lowp vec3 tmpvar_212;
+                              tmpvar_212 = (tmpvar_208 * planeOffsets[4]);
+                              lowp float tmpvar_213;
+                              tmpvar_213 = (((
+                                (tmpvar_212.x + tmpvar_212.y)
+                               + tmpvar_212.z) - dot (tmpvar_208, point_148)) / dot (tmpvar_208, tmpvar_163));
+                              if (((tmpvar_213 < t_hit_203) && (tmpvar_213 > 0.01))) {
+                                t_hit_209 = tmpvar_213;
+                                tmpvar_211 = bool(1);
+                                tmpvar_210 = bool(0);
+                              };
+                              if (tmpvar_210) {
+                                tmpvar_211 = bool(0);
+                                tmpvar_210 = bool(0);
+                              };
+                              t_hit_166 = t_hit_209;
+                              if (tmpvar_211) {
+                                position_167 = (point_148 + (tmpvar_163 * t_hit_209));
+                                normal_168 = tmpvar_208;
+                                diffuseColor_169 = planeColors[4];
+                                specularColor_170 = vec3(0.5, 0.5, 0.5);
+                              };
+                            };
+                          };
+                        };
+                      };
+                    };
+                    bool tmp_214;
+                    if ((0 < numLights)) {
+                      vec3 tmpvar_215;
+                      tmpvar_215 = lightPos[0];
+                      vec2 tmpvar_216;
+                      tmpvar_216 = lightSize[0];
+                      tmp_214 = bool(0);
+                      float tmpvar_217;
+                      tmpvar_217 = sqrt(dot (tmpvar_216, tmpvar_216));
+                      if ((tmpvar_217 > 0.0)) {
+                        lowp float t_hit_218;
+                        t_hit_218 = t_hit_166;
+                        bool tmpvar_219;
+                        tmpvar_219 = bool(1);
+                        bool tmpvar_220;
+                        vec3 tmpvar_221;
+                        tmpvar_221 = (vec3(0.0, 1.0, 0.0) * tmpvar_215.y);
+                        lowp float tmpvar_222;
+                        tmpvar_222 = (((
+                          (tmpvar_221.x + tmpvar_221.y)
+                         + tmpvar_221.z) - point_148.y) / tmpvar_163.y);
+                        if (((tmpvar_222 < t_hit_166) && (tmpvar_222 > 0.01))) {
+                          lowp vec3 tmpvar_223;
+                          tmpvar_223 = (point_148 + (tmpvar_163 * tmpvar_222));
+                          float tmpvar_224;
+                          tmpvar_224 = sqrt(dot (tmpvar_216, tmpvar_216));
+                          if (((tmpvar_224 == 0.0) || ((
+                            ((tmpvar_223.x < (tmpvar_215.x + (tmpvar_216.x * 0.5))) && (tmpvar_223.x > (tmpvar_215.x - (tmpvar_216.x * 0.5))))
+                           && 
+                            (tmpvar_223.z < (tmpvar_215.z + (tmpvar_216.y * 0.5)))
+                          ) && (tmpvar_223.z > 
+                            (tmpvar_215.z - (tmpvar_216.y * 0.5))
+                          )))) {
+                            t_hit_218 = tmpvar_222;
+                            tmpvar_220 = bool(1);
+                            tmpvar_219 = bool(0);
+                          };
+                        };
+                        if (tmpvar_219) {
+                          tmpvar_220 = bool(0);
+                          tmpvar_219 = bool(0);
+                        };
+                        t_hit_166 = t_hit_218;
+                        tmp_214 = tmpvar_220;
+                      } else {
+                        lowp float t_hit_225;
+                        t_hit_225 = t_hit_166;
+                        bool tmpvar_226;
+                        lowp vec3 tmpvar_227;
+                        tmpvar_227 = (tmpvar_215 - point_148);
+                        lowp float tmpvar_228;
+                        tmpvar_228 = dot (tmpvar_163, tmpvar_163);
+                        lowp float tmpvar_229;
+                        tmpvar_229 = (-2.0 * dot (tmpvar_163, tmpvar_227));
+                        lowp float tmpvar_230;
+                        tmpvar_230 = ((tmpvar_229 * tmpvar_229) - ((4.0 * tmpvar_228) * (
+                          dot (tmpvar_227, tmpvar_227)
+                         - 0.01)));
+                        if ((tmpvar_230 < 0.0)) {
+                          tmpvar_226 = bool(0);
+                        } else {
+                          lowp float tmpvar_231;
+                          tmpvar_231 = sqrt(tmpvar_230);
+                          lowp float tmpvar_232;
+                          tmpvar_232 = ((-(tmpvar_229) - tmpvar_231) / (2.0 * tmpvar_228));
+                          lowp float tmpvar_233;
+                          tmpvar_233 = ((-(tmpvar_229) + tmpvar_231) / (2.0 * tmpvar_228));
+                          lowp float tmpvar_234;
+                          if ((tmpvar_232 < 0.01)) {
+                            tmpvar_234 = tmpvar_233;
+                          } else {
+                            tmpvar_234 = tmpvar_232;
+                          };
+                          if (((tmpvar_234 < t_hit_166) && (tmpvar_234 > 0.01))) {
+                            t_hit_225 = tmpvar_234;
+                            tmpvar_226 = bool(1);
+                          } else {
+                            tmpvar_226 = bool(0);
+                          };
+                        };
+                        t_hit_166 = t_hit_225;
+                        tmp_214 = tmpvar_226;
+                      };
+                      if (tmp_214) {
+                        diffuseColor_169 = lightIntensity[0];
+                        isLight_171 = bool(1);
+                      };
+                      bool tmp_235;
+                      if ((1 < numLights)) {
+                        vec3 tmpvar_236;
+                        tmpvar_236 = lightPos[1];
+                        vec2 tmpvar_237;
+                        tmpvar_237 = lightSize[1];
+                        tmp_235 = bool(0);
+                        float tmpvar_238;
+                        tmpvar_238 = sqrt(dot (tmpvar_237, tmpvar_237));
+                        if ((tmpvar_238 > 0.0)) {
+                          lowp float t_hit_239;
+                          t_hit_239 = t_hit_166;
+                          bool tmpvar_240;
+                          tmpvar_240 = bool(1);
+                          bool tmpvar_241;
+                          vec3 tmpvar_242;
+                          tmpvar_242 = (vec3(0.0, 1.0, 0.0) * tmpvar_236.y);
+                          lowp float tmpvar_243;
+                          tmpvar_243 = (((
+                            (tmpvar_242.x + tmpvar_242.y)
+                           + tmpvar_242.z) - point_148.y) / tmpvar_163.y);
+                          if (((tmpvar_243 < t_hit_166) && (tmpvar_243 > 0.01))) {
+                            lowp vec3 tmpvar_244;
+                            tmpvar_244 = (point_148 + (tmpvar_163 * tmpvar_243));
+                            float tmpvar_245;
+                            tmpvar_245 = sqrt(dot (tmpvar_237, tmpvar_237));
+                            if (((tmpvar_245 == 0.0) || ((
+                              ((tmpvar_244.x < (tmpvar_236.x + (tmpvar_237.x * 0.5))) && (tmpvar_244.x > (tmpvar_236.x - (tmpvar_237.x * 0.5))))
+                             && 
+                              (tmpvar_244.z < (tmpvar_236.z + (tmpvar_237.y * 0.5)))
+                            ) && (tmpvar_244.z > 
+                              (tmpvar_236.z - (tmpvar_237.y * 0.5))
+                            )))) {
+                              t_hit_239 = tmpvar_243;
+                              tmpvar_241 = bool(1);
+                              tmpvar_240 = bool(0);
+                            };
+                          };
+                          if (tmpvar_240) {
+                            tmpvar_241 = bool(0);
+                            tmpvar_240 = bool(0);
+                          };
+                          t_hit_166 = t_hit_239;
+                          tmp_235 = tmpvar_241;
+                        } else {
+                          lowp float t_hit_246;
+                          t_hit_246 = t_hit_166;
+                          bool tmpvar_247;
+                          lowp vec3 tmpvar_248;
+                          tmpvar_248 = (tmpvar_236 - point_148);
+                          lowp float tmpvar_249;
+                          tmpvar_249 = dot (tmpvar_163, tmpvar_163);
+                          lowp float tmpvar_250;
+                          tmpvar_250 = (-2.0 * dot (tmpvar_163, tmpvar_248));
+                          lowp float tmpvar_251;
+                          tmpvar_251 = ((tmpvar_250 * tmpvar_250) - ((4.0 * tmpvar_249) * (
+                            dot (tmpvar_248, tmpvar_248)
+                           - 0.01)));
+                          if ((tmpvar_251 < 0.0)) {
+                            tmpvar_247 = bool(0);
+                          } else {
+                            lowp float tmpvar_252;
+                            tmpvar_252 = sqrt(tmpvar_251);
+                            lowp float tmpvar_253;
+                            tmpvar_253 = ((-(tmpvar_250) - tmpvar_252) / (2.0 * tmpvar_249));
+                            lowp float tmpvar_254;
+                            tmpvar_254 = ((-(tmpvar_250) + tmpvar_252) / (2.0 * tmpvar_249));
+                            lowp float tmpvar_255;
+                            if ((tmpvar_253 < 0.01)) {
+                              tmpvar_255 = tmpvar_254;
+                            } else {
+                              tmpvar_255 = tmpvar_253;
+                            };
+                            if (((tmpvar_255 < t_hit_166) && (tmpvar_255 > 0.01))) {
+                              t_hit_246 = tmpvar_255;
+                              tmpvar_247 = bool(1);
+                            } else {
+                              tmpvar_247 = bool(0);
+                            };
+                          };
+                          t_hit_166 = t_hit_246;
+                          tmp_235 = tmpvar_247;
+                        };
+                        if (tmp_235) {
+                          diffuseColor_169 = lightIntensity[1];
+                          isLight_171 = bool(1);
+                        };
+                      };
+                    };
+                    lowp vec3 tmpvar_256;
+                    if (isLight_171) {
+                      tmpvar_256 = vec3(0.0, 0.0, 0.0);
+                    } else {
+                      lowp vec3 point_257;
+                      point_257 = position_167;
+                      lowp vec3 ray_dir_258;
+                      ray_dir_258 = tmpvar_163;
+                      lowp vec3 normal_259;
+                      normal_259 = normal_168;
+                      vec3 diffuseColor_260;
+                      diffuseColor_260 = diffuseColor_169;
+                      vec3 specularColor_261;
+                      specularColor_261 = specularColor_170;
+                      highp int i_262;
+                      lowp vec3 illuminationColor_263;
+                      i_262 = 0;
+                      while (true) {
+                        highp int k_264;
+                        highp int areaShadowSamples_265;
+                        lowp vec3 light_sum_266;
+                        if ((i_262 >= 2)) {
+                          break;
+                        };
+                        if ((i_262 >= numLights)) {
+                          break;
+                        };
+                        float tmpvar_267;
+                        vec2 x_268;
+                        x_268 = lightSize[i_262];
+                        tmpvar_267 = sqrt(dot (x_268, x_268));
+                        highp int tmpvar_269;
+                        if ((tmpvar_267 > 0.0)) {
+                          tmpvar_269 = shadowSamples;
+                        } else {
+                          tmpvar_269 = 1;
+                        };
+                        areaShadowSamples_265 = tmpvar_269;
+                        k_264 = 0;
+                        while (true) {
+                          lowp vec3 incident_intensity_270;
+                          if ((k_264 >= 49)) {
+                            break;
+                          };
+                          if ((k_264 >= areaShadowSamples_265)) {
+                            break;
+                          };
+                          vec3 position_271;
+                          position_271 = lightPos[i_262];
+                          vec3 intensity_272;
+                          intensity_272 = lightIntensity[i_262];
+                          vec2 size_273;
+                          size_273 = lightSize[i_262];
+                          float sample_i_274;
+                          sample_i_274 = float(k_264);
+                          lowp vec3 vec_to_light_275;
+                          float tmpvar_276;
+                          tmpvar_276 = sqrt(dot (size_273, size_273));
+                          if ((tmpvar_276 > 0.0)) {
+                            float tmpvar_277;
+                            tmpvar_277 = (1.0/(shadowDim));
+                            randomSeed += 0.02;
+                            lowp float tmpvar_278;
+                            tmpvar_278 = ((size_273.x * tmpvar_277) * ((float(mod (sample_i_274, shadowDim))) + fract(
+                              (cos(dot ((point_257.xy + randomSeed), vec2(23.14069, 2.665144))) * 12345.68)
+                            )));
+                            randomSeed += 0.02;
+                            lowp vec3 tmpvar_279;
+                            tmpvar_279.x = ((position_271.x - (size_273.x * 0.5)) + tmpvar_278);
+                            tmpvar_279.y = position_271.y;
+                            tmpvar_279.z = ((position_271.z - (size_273.y * 0.5)) + ((size_273.y * tmpvar_277) * (
+                              floor((sample_i_274 * tmpvar_277))
+                             + 
+                              fract((cos(dot (
+                                (point_257.yx + randomSeed)
+                              , vec2(23.14069, 2.665144))) * 12345.68))
+                            )));
+                            vec_to_light_275 = (tmpvar_279 - point_257);
+                          } else {
+                            vec_to_light_275 = (position_271 - point_257);
+                          };
+                          lowp float tmpvar_280;
+                          tmpvar_280 = sqrt(dot (vec_to_light_275, vec_to_light_275));
+                          lowp vec3 tmpvar_281;
+                          tmpvar_281 = normalize(vec_to_light_275);
+                          vec_to_light_275 = tmpvar_281;
+                          incident_intensity_270 = (intensity_272 * (1.0/((
+                            (0.1 * (tmpvar_280 * tmpvar_280))
+                           + 
+                            (0.4 * tmpvar_280)
+                          ))));
+                          lowp vec3 ray_origin_282;
+                          ray_origin_282 = point_257;
+                          lowp vec3 ray_direction_283;
+                          ray_direction_283 = tmpvar_281;
+                          lowp float t_hit_284;
+                          t_hit_284 = tmpvar_280;
+                          bool tmpvar_285;
+                          tmpvar_285 = bool(0);
+                          highp int i_286;
+                          highp int i_287;
+                          i_287 = 0;
+                          while (true) {
+                            if ((i_287 >= 5)) {
+                              break;
+                            };
+                            if ((i_287 >= numSpheres)) {
+                              break;
+                            };
+                            lowp float t_hit_288;
+                            t_hit_288 = t_hit_284;
+                            bool tmpvar_289;
+                            lowp vec3 tmpvar_290;
+                            tmpvar_290 = (sphereCenters[i_287] - ray_origin_282);
+                            lowp float tmpvar_291;
+                            tmpvar_291 = dot (ray_direction_283, ray_direction_283);
+                            lowp float tmpvar_292;
+                            tmpvar_292 = (-2.0 * dot (ray_direction_283, tmpvar_290));
+                            lowp float tmpvar_293;
+                            tmpvar_293 = ((tmpvar_292 * tmpvar_292) - ((4.0 * tmpvar_291) * (
+                              dot (tmpvar_290, tmpvar_290)
+                             - 0.64)));
+                            if ((tmpvar_293 < 0.0)) {
+                              tmpvar_289 = bool(0);
+                            } else {
+                              lowp float tmpvar_294;
+                              tmpvar_294 = sqrt(tmpvar_293);
+                              lowp float tmpvar_295;
+                              tmpvar_295 = ((-(tmpvar_292) - tmpvar_294) / (2.0 * tmpvar_291));
+                              lowp float tmpvar_296;
+                              tmpvar_296 = ((-(tmpvar_292) + tmpvar_294) / (2.0 * tmpvar_291));
+                              lowp float tmpvar_297;
+                              if ((tmpvar_295 < 0.01)) {
+                                tmpvar_297 = tmpvar_296;
+                              } else {
+                                tmpvar_297 = tmpvar_295;
+                              };
+                              if (((tmpvar_297 < t_hit_284) && (tmpvar_297 > 0.01))) {
+                                t_hit_288 = tmpvar_297;
+                                tmpvar_289 = bool(1);
+                              } else {
+                                tmpvar_289 = bool(0);
+                              };
+                            };
+                            t_hit_284 = t_hit_288;
+                            if (tmpvar_289) {
+                              tmpvar_285 = bool(1);
+                              break;
+                            };
+                            i_287++;
+                          };
+                          if (!(tmpvar_285)) {
+                            i_286 = 0;
+                            while (true) {
+                              if ((i_286 >= 5)) {
+                                break;
+                              };
+                              if ((i_286 >= numPlanes)) {
+                                break;
+                              };
+                              vec3 normal_298;
+                              normal_298 = planeNormals[i_286];
+                              lowp float t_hit_299;
+                              t_hit_299 = t_hit_284;
+                              bool tmpvar_300;
+                              tmpvar_300 = bool(1);
+                              bool tmpvar_301;
+                              vec3 tmpvar_302;
+                              tmpvar_302 = (normal_298 * planeOffsets[i_286]);
+                              lowp float tmpvar_303;
+                              tmpvar_303 = (((
+                                (tmpvar_302.x + tmpvar_302.y)
+                               + tmpvar_302.z) - dot (normal_298, ray_origin_282)) / dot (normal_298, ray_direction_283));
+                              if (((tmpvar_303 < t_hit_284) && (tmpvar_303 > 0.01))) {
+                                t_hit_299 = tmpvar_303;
+                                tmpvar_301 = bool(1);
+                                tmpvar_300 = bool(0);
+                              };
+                              if (tmpvar_300) {
+                                tmpvar_301 = bool(0);
+                                tmpvar_300 = bool(0);
+                              };
+                              t_hit_284 = t_hit_299;
+                              if (tmpvar_301) {
+                                tmpvar_285 = bool(1);
+                                break;
+                              };
+                              i_286++;
+                            };
+                            if (!(tmpvar_285)) {
+                              tmpvar_285 = bool(1);
+                            };
+                          };
+                          lowp float tmpvar_304;
+                          tmpvar_304 = abs((t_hit_284 - tmpvar_280));
+                          if ((tmpvar_304 < 0.001)) {
+                            lowp vec3 specular_305;
+                            lowp vec3 tmpvar_306;
+                            tmpvar_306 = (incident_intensity_270 * max (0.0, dot (normal_259, tmpvar_281)));
+                            lowp float tmpvar_307;
+                            tmpvar_307 = dot (normal_259, tmpvar_281);
+                            if ((tmpvar_307 > 0.0)) {
+                              specular_305 = (specularColor_261 * pow (max (0.0, 
+                                dot ((-(tmpvar_281) - ((2.0 * 
+                                  dot (-(tmpvar_281), normal_259)
+                                ) * normal_259)), -(ray_dir_258))
+                              ), 32.0));
+                            };
+                            light_sum_266 = (light_sum_266 + (tmpvar_306 * (diffuseColor_260 + specular_305)));
+                          };
+                          k_264++;
+                        };
+                        illuminationColor_263 = (illuminationColor_263 + (light_sum_266 / float(tmpvar_269)));
+                        i_262++;
+                      };
+                      tmpvar_256 = (tmpvar_159 * illuminationColor_263);
+                    };
+                    indirect_sampling_sum_151 = (indirect_sampling_sum_151 + tmpvar_256);
+                    k_150++;
+                  };
+                  tmpvar_149 = (((2.0 * indirect_sampling_sum_151) / float(indirectSamples)) * diffuseColor_8);
+                };
+                pixelColor_1 = (pixelColor_1 + tmpvar_149);
+              };
+              bool tmpvar_308;
+              if ((rayBounces > 0)) {
+                tmpvar_308 = (sqrt(dot (reflectiveColor_10, reflectiveColor_10)) > 0.0);
+              } else {
+                tmpvar_308 = bool(0);
+              };
+              if (tmpvar_308) {
+                lowp vec3 origin_309;
+                origin_309 = position_6;
+                lowp vec3 rayDir_310;
+                rayDir_310 = tmpvar_2;
+                lowp vec3 normal_311;
+                normal_311 = normal_7;
+                vec3 reflectiveColor_312;
+                reflectiveColor_312 = reflectiveColor_10;
+                lowp vec3 reflectionSum_314;
+                for (highp int i_313 = 0; i_313 < 5; i_313++) {
+                  lowp vec3 mirror_sample_color_315;
+                  bool tmpvar_316;
+                  if ((i_313 >= rayBounces)) {
+                    tmpvar_316 = bool(1);
+                  } else {
+                    tmpvar_316 = (sqrt(dot (reflectiveColor_312, reflectiveColor_312)) == 0.0);
+                  };
+                  if (tmpvar_316) {
+                    break;
+                  };
+                  lowp vec3 tmpvar_317;
+                  tmpvar_317 = (rayDir_310 - ((2.0 * 
+                    dot (rayDir_310, normal_311)
+                  ) * normal_311));
+                  lowp vec3 ray_origin_318;
+                  ray_origin_318 = origin_309;
+                  lowp vec3 ray_direction_319;
+                  ray_direction_319 = tmpvar_317;
+                  lowp float t_hit_320;
+                  t_hit_320 = 50.0;
+                  lowp vec3 position_321;
+                  lowp vec3 normal_322;
+                  vec3 diffuseColor_323;
+                  vec3 specularColor_324;
+                  vec3 reflectiveColor_325;
+                  bool isLight_326;
+                  isLight_326 = bool(0);
+                  highp int i_327;
+                  i_327 = 0;
+                  while (true) {
+                    if ((i_327 >= 5)) {
+                      break;
+                    };
+                    if ((i_327 >= numSpheres)) {
+                      break;
+                    };
+                    vec3 tmpvar_328;
+                    tmpvar_328 = sphereCenters[i_327];
+                    lowp float t_hit_329;
+                    t_hit_329 = t_hit_320;
+                    bool tmpvar_330;
+                    lowp vec3 tmpvar_331;
+                    tmpvar_331 = (tmpvar_328 - ray_origin_318);
+                    lowp float tmpvar_332;
+                    tmpvar_332 = dot (ray_direction_319, ray_direction_319);
+                    lowp float tmpvar_333;
+                    tmpvar_333 = (-2.0 * dot (ray_direction_319, tmpvar_331));
+                    lowp float tmpvar_334;
+                    tmpvar_334 = ((tmpvar_333 * tmpvar_333) - ((4.0 * tmpvar_332) * (
+                      dot (tmpvar_331, tmpvar_331)
+                     - 0.64)));
+                    if ((tmpvar_334 < 0.0)) {
+                      tmpvar_330 = bool(0);
+                    } else {
+                      lowp float tmpvar_335;
+                      tmpvar_335 = sqrt(tmpvar_334);
+                      lowp float tmpvar_336;
+                      tmpvar_336 = ((-(tmpvar_333) - tmpvar_335) / (2.0 * tmpvar_332));
+                      lowp float tmpvar_337;
+                      tmpvar_337 = ((-(tmpvar_333) + tmpvar_335) / (2.0 * tmpvar_332));
+                      lowp float tmpvar_338;
+                      if ((tmpvar_336 < 0.01)) {
+                        tmpvar_338 = tmpvar_337;
+                      } else {
+                        tmpvar_338 = tmpvar_336;
+                      };
+                      if (((tmpvar_338 < t_hit_320) && (tmpvar_338 > 0.01))) {
+                        t_hit_329 = tmpvar_338;
+                        tmpvar_330 = bool(1);
+                      } else {
+                        tmpvar_330 = bool(0);
+                      };
+                    };
+                    t_hit_320 = t_hit_329;
+                    if (tmpvar_330) {
+                      position_321 = (ray_origin_318 + (ray_direction_319 * t_hit_329));
+                      normal_322 = normalize((position_321 - tmpvar_328));
+                      diffuseColor_323 = sphereColors[i_327];
+                      specularColor_324 = vec3(1.0, 1.0, 1.0);
+                      reflectiveColor_325 = reflectiveColors[i_327];
+                    };
+                    i_327++;
+                  };
+                  if ((0 < numPlanes)) {
+                    lowp vec3 tmpvar_339;
+                    tmpvar_339 = planeNormals[0];
+                    lowp float t_hit_340;
+                    t_hit_340 = t_hit_320;
+                    bool tmpvar_341;
+                    tmpvar_341 = bool(1);
+                    bool tmpvar_342;
+                    lowp vec3 tmpvar_343;
+                    tmpvar_343 = (tmpvar_339 * planeOffsets[0]);
+                    lowp float tmpvar_344;
+                    tmpvar_344 = (((
+                      (tmpvar_343.x + tmpvar_343.y)
+                     + tmpvar_343.z) - dot (tmpvar_339, origin_309)) / dot (tmpvar_339, tmpvar_317));
+                    if (((tmpvar_344 < t_hit_320) && (tmpvar_344 > 0.01))) {
+                      t_hit_340 = tmpvar_344;
+                      tmpvar_342 = bool(1);
+                      tmpvar_341 = bool(0);
+                    };
+                    if (tmpvar_341) {
+                      tmpvar_342 = bool(0);
+                      tmpvar_341 = bool(0);
+                    };
+                    t_hit_320 = t_hit_340;
+                    if (tmpvar_342) {
+                      position_321 = (origin_309 + (tmpvar_317 * t_hit_340));
+                      normal_322 = tmpvar_339;
+                      diffuseColor_323 = planeColors[0];
+                      specularColor_324 = vec3(0.5, 0.5, 0.5);
+                      reflectiveColor_325 = vec3(0.0, 0.0, 0.0);
+                    };
+                    if ((1 < numPlanes)) {
+                      lowp vec3 tmpvar_345;
+                      tmpvar_345 = planeNormals[1];
+                      lowp float t_hit_346;
+                      t_hit_346 = t_hit_340;
+                      bool tmpvar_347;
+                      tmpvar_347 = bool(1);
+                      bool tmpvar_348;
+                      lowp vec3 tmpvar_349;
+                      tmpvar_349 = (tmpvar_345 * planeOffsets[1]);
+                      lowp float tmpvar_350;
+                      tmpvar_350 = (((
+                        (tmpvar_349.x + tmpvar_349.y)
+                       + tmpvar_349.z) - dot (tmpvar_345, origin_309)) / dot (tmpvar_345, tmpvar_317));
+                      if (((tmpvar_350 < t_hit_340) && (tmpvar_350 > 0.01))) {
+                        t_hit_346 = tmpvar_350;
+                        tmpvar_348 = bool(1);
+                        tmpvar_347 = bool(0);
+                      };
+                      if (tmpvar_347) {
+                        tmpvar_348 = bool(0);
+                        tmpvar_347 = bool(0);
+                      };
+                      t_hit_320 = t_hit_346;
+                      if (tmpvar_348) {
+                        position_321 = (origin_309 + (tmpvar_317 * t_hit_346));
+                        normal_322 = tmpvar_345;
+                        diffuseColor_323 = planeColors[1];
+                        specularColor_324 = vec3(0.5, 0.5, 0.5);
+                        reflectiveColor_325 = vec3(0.0, 0.0, 0.0);
+                      };
+                      if ((2 < numPlanes)) {
+                        lowp vec3 tmpvar_351;
+                        tmpvar_351 = planeNormals[2];
+                        lowp float t_hit_352;
+                        t_hit_352 = t_hit_346;
+                        bool tmpvar_353;
+                        tmpvar_353 = bool(1);
+                        bool tmpvar_354;
+                        lowp vec3 tmpvar_355;
+                        tmpvar_355 = (tmpvar_351 * planeOffsets[2]);
+                        lowp float tmpvar_356;
+                        tmpvar_356 = (((
+                          (tmpvar_355.x + tmpvar_355.y)
+                         + tmpvar_355.z) - dot (tmpvar_351, origin_309)) / dot (tmpvar_351, tmpvar_317));
+                        if (((tmpvar_356 < t_hit_346) && (tmpvar_356 > 0.01))) {
+                          t_hit_352 = tmpvar_356;
+                          tmpvar_354 = bool(1);
+                          tmpvar_353 = bool(0);
+                        };
+                        if (tmpvar_353) {
+                          tmpvar_354 = bool(0);
+                          tmpvar_353 = bool(0);
+                        };
+                        t_hit_320 = t_hit_352;
+                        if (tmpvar_354) {
+                          position_321 = (origin_309 + (tmpvar_317 * t_hit_352));
+                          normal_322 = tmpvar_351;
+                          diffuseColor_323 = planeColors[2];
+                          specularColor_324 = vec3(0.5, 0.5, 0.5);
+                          reflectiveColor_325 = vec3(0.0, 0.0, 0.0);
+                        };
+                        if ((3 < numPlanes)) {
+                          lowp vec3 tmpvar_357;
+                          tmpvar_357 = planeNormals[3];
+                          lowp float t_hit_358;
+                          t_hit_358 = t_hit_352;
+                          bool tmpvar_359;
+                          tmpvar_359 = bool(1);
+                          bool tmpvar_360;
+                          lowp vec3 tmpvar_361;
+                          tmpvar_361 = (tmpvar_357 * planeOffsets[3]);
+                          lowp float tmpvar_362;
+                          tmpvar_362 = (((
+                            (tmpvar_361.x + tmpvar_361.y)
+                           + tmpvar_361.z) - dot (tmpvar_357, origin_309)) / dot (tmpvar_357, tmpvar_317));
+                          if (((tmpvar_362 < t_hit_352) && (tmpvar_362 > 0.01))) {
+                            t_hit_358 = tmpvar_362;
+                            tmpvar_360 = bool(1);
+                            tmpvar_359 = bool(0);
+                          };
+                          if (tmpvar_359) {
+                            tmpvar_360 = bool(0);
+                            tmpvar_359 = bool(0);
+                          };
+                          t_hit_320 = t_hit_358;
+                          if (tmpvar_360) {
+                            position_321 = (origin_309 + (tmpvar_317 * t_hit_358));
+                            normal_322 = tmpvar_357;
+                            diffuseColor_323 = planeColors[3];
+                            specularColor_324 = vec3(0.5, 0.5, 0.5);
+                            reflectiveColor_325 = vec3(0.0, 0.0, 0.0);
+                          };
+                          if ((4 < numPlanes)) {
+                            lowp vec3 tmpvar_363;
+                            tmpvar_363 = planeNormals[4];
+                            lowp float t_hit_364;
+                            t_hit_364 = t_hit_358;
+                            bool tmpvar_365;
+                            tmpvar_365 = bool(1);
+                            bool tmpvar_366;
+                            lowp vec3 tmpvar_367;
+                            tmpvar_367 = (tmpvar_363 * planeOffsets[4]);
+                            lowp float tmpvar_368;
+                            tmpvar_368 = (((
+                              (tmpvar_367.x + tmpvar_367.y)
+                             + tmpvar_367.z) - dot (tmpvar_363, origin_309)) / dot (tmpvar_363, tmpvar_317));
+                            if (((tmpvar_368 < t_hit_358) && (tmpvar_368 > 0.01))) {
+                              t_hit_364 = tmpvar_368;
+                              tmpvar_366 = bool(1);
+                              tmpvar_365 = bool(0);
+                            };
+                            if (tmpvar_365) {
+                              tmpvar_366 = bool(0);
+                              tmpvar_365 = bool(0);
+                            };
+                            t_hit_320 = t_hit_364;
+                            if (tmpvar_366) {
+                              position_321 = (origin_309 + (tmpvar_317 * t_hit_364));
+                              normal_322 = tmpvar_363;
+                              diffuseColor_323 = planeColors[4];
+                              specularColor_324 = vec3(0.5, 0.5, 0.5);
+                              reflectiveColor_325 = vec3(0.0, 0.0, 0.0);
+                            };
+                          };
+                        };
+                      };
+                    };
+                  };
+                  bool tmp_369;
+                  if ((0 < numLights)) {
+                    vec3 tmpvar_370;
+                    tmpvar_370 = lightPos[0];
+                    vec2 tmpvar_371;
+                    tmpvar_371 = lightSize[0];
+                    tmp_369 = bool(0);
+                    float tmpvar_372;
+                    tmpvar_372 = sqrt(dot (tmpvar_371, tmpvar_371));
+                    if ((tmpvar_372 > 0.0)) {
+                      lowp float t_hit_373;
+                      t_hit_373 = t_hit_320;
+                      bool tmpvar_374;
+                      tmpvar_374 = bool(1);
+                      bool tmpvar_375;
+                      vec3 tmpvar_376;
+                      tmpvar_376 = (vec3(0.0, 1.0, 0.0) * tmpvar_370.y);
+                      lowp float tmpvar_377;
+                      tmpvar_377 = (((
+                        (tmpvar_376.x + tmpvar_376.y)
+                       + tmpvar_376.z) - origin_309.y) / tmpvar_317.y);
+                      if (((tmpvar_377 < t_hit_320) && (tmpvar_377 > 0.01))) {
+                        lowp vec3 tmpvar_378;
+                        tmpvar_378 = (origin_309 + (tmpvar_317 * tmpvar_377));
+                        float tmpvar_379;
+                        tmpvar_379 = sqrt(dot (tmpvar_371, tmpvar_371));
+                        if (((tmpvar_379 == 0.0) || ((
+                          ((tmpvar_378.x < (tmpvar_370.x + (tmpvar_371.x * 0.5))) && (tmpvar_378.x > (tmpvar_370.x - (tmpvar_371.x * 0.5))))
+                         && 
+                          (tmpvar_378.z < (tmpvar_370.z + (tmpvar_371.y * 0.5)))
+                        ) && (tmpvar_378.z > 
+                          (tmpvar_370.z - (tmpvar_371.y * 0.5))
+                        )))) {
+                          t_hit_373 = tmpvar_377;
+                          tmpvar_375 = bool(1);
+                          tmpvar_374 = bool(0);
+                        };
+                      };
+                      if (tmpvar_374) {
+                        tmpvar_375 = bool(0);
+                        tmpvar_374 = bool(0);
+                      };
+                      t_hit_320 = t_hit_373;
+                      tmp_369 = tmpvar_375;
+                    } else {
+                      lowp float t_hit_380;
+                      t_hit_380 = t_hit_320;
+                      bool tmpvar_381;
+                      lowp vec3 tmpvar_382;
+                      tmpvar_382 = (tmpvar_370 - origin_309);
+                      lowp float tmpvar_383;
+                      tmpvar_383 = dot (tmpvar_317, tmpvar_317);
+                      lowp float tmpvar_384;
+                      tmpvar_384 = (-2.0 * dot (tmpvar_317, tmpvar_382));
+                      lowp float tmpvar_385;
+                      tmpvar_385 = ((tmpvar_384 * tmpvar_384) - ((4.0 * tmpvar_383) * (
+                        dot (tmpvar_382, tmpvar_382)
+                       - 0.01)));
+                      if ((tmpvar_385 < 0.0)) {
+                        tmpvar_381 = bool(0);
+                      } else {
+                        lowp float tmpvar_386;
+                        tmpvar_386 = sqrt(tmpvar_385);
+                        lowp float tmpvar_387;
+                        tmpvar_387 = ((-(tmpvar_384) - tmpvar_386) / (2.0 * tmpvar_383));
+                        lowp float tmpvar_388;
+                        tmpvar_388 = ((-(tmpvar_384) + tmpvar_386) / (2.0 * tmpvar_383));
+                        lowp float tmpvar_389;
+                        if ((tmpvar_387 < 0.01)) {
+                          tmpvar_389 = tmpvar_388;
+                        } else {
+                          tmpvar_389 = tmpvar_387;
+                        };
+                        if (((tmpvar_389 < t_hit_320) && (tmpvar_389 > 0.01))) {
+                          t_hit_380 = tmpvar_389;
+                          tmpvar_381 = bool(1);
+                        } else {
+                          tmpvar_381 = bool(0);
+                        };
+                      };
+                      t_hit_320 = t_hit_380;
+                      tmp_369 = tmpvar_381;
+                    };
+                    if (tmp_369) {
+                      diffuseColor_323 = lightIntensity[0];
+                      isLight_326 = bool(1);
+                    };
+                    bool tmp_390;
+                    if ((1 < numLights)) {
+                      vec3 tmpvar_391;
+                      tmpvar_391 = lightPos[1];
+                      vec2 tmpvar_392;
+                      tmpvar_392 = lightSize[1];
+                      tmp_390 = bool(0);
+                      float tmpvar_393;
+                      tmpvar_393 = sqrt(dot (tmpvar_392, tmpvar_392));
+                      if ((tmpvar_393 > 0.0)) {
+                        lowp float t_hit_394;
+                        t_hit_394 = t_hit_320;
+                        bool tmpvar_395;
+                        tmpvar_395 = bool(1);
+                        bool tmpvar_396;
+                        vec3 tmpvar_397;
+                        tmpvar_397 = (vec3(0.0, 1.0, 0.0) * tmpvar_391.y);
+                        lowp float tmpvar_398;
+                        tmpvar_398 = (((
+                          (tmpvar_397.x + tmpvar_397.y)
+                         + tmpvar_397.z) - origin_309.y) / tmpvar_317.y);
+                        if (((tmpvar_398 < t_hit_320) && (tmpvar_398 > 0.01))) {
+                          lowp vec3 tmpvar_399;
+                          tmpvar_399 = (origin_309 + (tmpvar_317 * tmpvar_398));
+                          float tmpvar_400;
+                          tmpvar_400 = sqrt(dot (tmpvar_392, tmpvar_392));
+                          if (((tmpvar_400 == 0.0) || ((
+                            ((tmpvar_399.x < (tmpvar_391.x + (tmpvar_392.x * 0.5))) && (tmpvar_399.x > (tmpvar_391.x - (tmpvar_392.x * 0.5))))
+                           && 
+                            (tmpvar_399.z < (tmpvar_391.z + (tmpvar_392.y * 0.5)))
+                          ) && (tmpvar_399.z > 
+                            (tmpvar_391.z - (tmpvar_392.y * 0.5))
+                          )))) {
+                            t_hit_394 = tmpvar_398;
+                            tmpvar_396 = bool(1);
+                            tmpvar_395 = bool(0);
+                          };
+                        };
+                        if (tmpvar_395) {
+                          tmpvar_396 = bool(0);
+                          tmpvar_395 = bool(0);
+                        };
+                        t_hit_320 = t_hit_394;
+                        tmp_390 = tmpvar_396;
+                      } else {
+                        lowp float t_hit_401;
+                        t_hit_401 = t_hit_320;
+                        bool tmpvar_402;
+                        lowp vec3 tmpvar_403;
+                        tmpvar_403 = (tmpvar_391 - origin_309);
+                        lowp float tmpvar_404;
+                        tmpvar_404 = dot (tmpvar_317, tmpvar_317);
+                        lowp float tmpvar_405;
+                        tmpvar_405 = (-2.0 * dot (tmpvar_317, tmpvar_403));
+                        lowp float tmpvar_406;
+                        tmpvar_406 = ((tmpvar_405 * tmpvar_405) - ((4.0 * tmpvar_404) * (
+                          dot (tmpvar_403, tmpvar_403)
+                         - 0.01)));
+                        if ((tmpvar_406 < 0.0)) {
+                          tmpvar_402 = bool(0);
+                        } else {
+                          lowp float tmpvar_407;
+                          tmpvar_407 = sqrt(tmpvar_406);
+                          lowp float tmpvar_408;
+                          tmpvar_408 = ((-(tmpvar_405) - tmpvar_407) / (2.0 * tmpvar_404));
+                          lowp float tmpvar_409;
+                          tmpvar_409 = ((-(tmpvar_405) + tmpvar_407) / (2.0 * tmpvar_404));
+                          lowp float tmpvar_410;
+                          if ((tmpvar_408 < 0.01)) {
+                            tmpvar_410 = tmpvar_409;
+                          } else {
+                            tmpvar_410 = tmpvar_408;
+                          };
+                          if (((tmpvar_410 < t_hit_320) && (tmpvar_410 > 0.01))) {
+                            t_hit_401 = tmpvar_410;
+                            tmpvar_402 = bool(1);
+                          } else {
+                            tmpvar_402 = bool(0);
+                          };
+                        };
+                        t_hit_320 = t_hit_401;
+                        tmp_390 = tmpvar_402;
+                      };
+                      if (tmp_390) {
+                        diffuseColor_323 = lightIntensity[1];
+                        isLight_326 = bool(1);
+                      };
+                    };
+                  };
+                  normal_311 = normal_322;
+                  lowp vec3 tmpvar_411;
+                  if (isLight_326) {
+                    tmpvar_411 = diffuseColor_323;
+                  } else {
+                    lowp vec3 point_412;
+                    point_412 = position_321;
+                    lowp vec3 ray_dir_413;
+                    ray_dir_413 = tmpvar_317;
+                    lowp vec3 normal_414;
+                    normal_414 = normal_322;
+                    vec3 diffuseColor_415;
+                    diffuseColor_415 = diffuseColor_323;
+                    vec3 specularColor_416;
+                    specularColor_416 = specularColor_324;
+                    highp int i_417;
+                    lowp vec3 illuminationColor_418;
+                    i_417 = 0;
+                    while (true) {
+                      highp int k_419;
+                      highp int areaShadowSamples_420;
+                      lowp vec3 light_sum_421;
+                      if ((i_417 >= 2)) {
+                        break;
+                      };
+                      if ((i_417 >= numLights)) {
+                        break;
+                      };
+                      float tmpvar_422;
+                      vec2 x_423;
+                      x_423 = lightSize[i_417];
+                      tmpvar_422 = sqrt(dot (x_423, x_423));
+                      highp int tmpvar_424;
+                      if ((tmpvar_422 > 0.0)) {
+                        tmpvar_424 = shadowSamples;
+                      } else {
+                        tmpvar_424 = 1;
+                      };
+                      areaShadowSamples_420 = tmpvar_424;
+                      k_419 = 0;
+                      while (true) {
+                        lowp vec3 incident_intensity_425;
+                        if ((k_419 >= 49)) {
+                          break;
+                        };
+                        if ((k_419 >= areaShadowSamples_420)) {
+                          break;
+                        };
+                        vec3 position_426;
+                        position_426 = lightPos[i_417];
+                        vec3 intensity_427;
+                        intensity_427 = lightIntensity[i_417];
+                        vec2 size_428;
+                        size_428 = lightSize[i_417];
+                        float sample_i_429;
+                        sample_i_429 = float(k_419);
+                        lowp vec3 vec_to_light_430;
+                        float tmpvar_431;
+                        tmpvar_431 = sqrt(dot (size_428, size_428));
+                        if ((tmpvar_431 > 0.0)) {
+                          float tmpvar_432;
+                          tmpvar_432 = (1.0/(shadowDim));
+                          randomSeed += 0.02;
+                          lowp float tmpvar_433;
+                          tmpvar_433 = ((size_428.x * tmpvar_432) * ((float(mod (sample_i_429, shadowDim))) + fract(
+                            (cos(dot ((point_412.xy + randomSeed), vec2(23.14069, 2.665144))) * 12345.68)
+                          )));
+                          randomSeed += 0.02;
+                          lowp vec3 tmpvar_434;
+                          tmpvar_434.x = ((position_426.x - (size_428.x * 0.5)) + tmpvar_433);
+                          tmpvar_434.y = position_426.y;
+                          tmpvar_434.z = ((position_426.z - (size_428.y * 0.5)) + ((size_428.y * tmpvar_432) * (
+                            floor((sample_i_429 * tmpvar_432))
+                           + 
+                            fract((cos(dot (
+                              (point_412.yx + randomSeed)
+                            , vec2(23.14069, 2.665144))) * 12345.68))
+                          )));
+                          vec_to_light_430 = (tmpvar_434 - point_412);
+                        } else {
+                          vec_to_light_430 = (position_426 - point_412);
+                        };
+                        lowp float tmpvar_435;
+                        tmpvar_435 = sqrt(dot (vec_to_light_430, vec_to_light_430));
+                        lowp vec3 tmpvar_436;
+                        tmpvar_436 = normalize(vec_to_light_430);
+                        vec_to_light_430 = tmpvar_436;
+                        incident_intensity_425 = (intensity_427 * (1.0/((
+                          (0.1 * (tmpvar_435 * tmpvar_435))
+                         + 
+                          (0.4 * tmpvar_435)
+                        ))));
+                        lowp vec3 ray_origin_437;
+                        ray_origin_437 = point_412;
+                        lowp vec3 ray_direction_438;
+                        ray_direction_438 = tmpvar_436;
+                        lowp float t_hit_439;
+                        t_hit_439 = tmpvar_435;
+                        bool tmpvar_440;
+                        tmpvar_440 = bool(0);
+                        highp int i_441;
+                        highp int i_442;
+                        i_442 = 0;
+                        while (true) {
+                          if ((i_442 >= 5)) {
+                            break;
+                          };
+                          if ((i_442 >= numSpheres)) {
+                            break;
+                          };
+                          lowp float t_hit_443;
+                          t_hit_443 = t_hit_439;
+                          bool tmpvar_444;
+                          lowp vec3 tmpvar_445;
+                          tmpvar_445 = (sphereCenters[i_442] - ray_origin_437);
+                          lowp float tmpvar_446;
+                          tmpvar_446 = dot (ray_direction_438, ray_direction_438);
+                          lowp float tmpvar_447;
+                          tmpvar_447 = (-2.0 * dot (ray_direction_438, tmpvar_445));
+                          lowp float tmpvar_448;
+                          tmpvar_448 = ((tmpvar_447 * tmpvar_447) - ((4.0 * tmpvar_446) * (
+                            dot (tmpvar_445, tmpvar_445)
+                           - 0.64)));
+                          if ((tmpvar_448 < 0.0)) {
+                            tmpvar_444 = bool(0);
+                          } else {
+                            lowp float tmpvar_449;
+                            tmpvar_449 = sqrt(tmpvar_448);
+                            lowp float tmpvar_450;
+                            tmpvar_450 = ((-(tmpvar_447) - tmpvar_449) / (2.0 * tmpvar_446));
+                            lowp float tmpvar_451;
+                            tmpvar_451 = ((-(tmpvar_447) + tmpvar_449) / (2.0 * tmpvar_446));
+                            lowp float tmpvar_452;
+                            if ((tmpvar_450 < 0.01)) {
+                              tmpvar_452 = tmpvar_451;
+                            } else {
+                              tmpvar_452 = tmpvar_450;
+                            };
+                            if (((tmpvar_452 < t_hit_439) && (tmpvar_452 > 0.01))) {
+                              t_hit_443 = tmpvar_452;
+                              tmpvar_444 = bool(1);
+                            } else {
+                              tmpvar_444 = bool(0);
+                            };
+                          };
+                          t_hit_439 = t_hit_443;
+                          if (tmpvar_444) {
+                            tmpvar_440 = bool(1);
+                            break;
+                          };
+                          i_442++;
+                        };
+                        if (!(tmpvar_440)) {
+                          i_441 = 0;
+                          while (true) {
+                            if ((i_441 >= 5)) {
+                              break;
+                            };
+                            if ((i_441 >= numPlanes)) {
+                              break;
+                            };
+                            vec3 normal_453;
+                            normal_453 = planeNormals[i_441];
+                            lowp float t_hit_454;
+                            t_hit_454 = t_hit_439;
+                            bool tmpvar_455;
+                            tmpvar_455 = bool(1);
+                            bool tmpvar_456;
+                            vec3 tmpvar_457;
+                            tmpvar_457 = (normal_453 * planeOffsets[i_441]);
+                            lowp float tmpvar_458;
+                            tmpvar_458 = (((
+                              (tmpvar_457.x + tmpvar_457.y)
+                             + tmpvar_457.z) - dot (normal_453, ray_origin_437)) / dot (normal_453, ray_direction_438));
+                            if (((tmpvar_458 < t_hit_439) && (tmpvar_458 > 0.01))) {
+                              t_hit_454 = tmpvar_458;
+                              tmpvar_456 = bool(1);
+                              tmpvar_455 = bool(0);
+                            };
+                            if (tmpvar_455) {
+                              tmpvar_456 = bool(0);
+                              tmpvar_455 = bool(0);
+                            };
+                            t_hit_439 = t_hit_454;
+                            if (tmpvar_456) {
+                              tmpvar_440 = bool(1);
+                              break;
+                            };
+                            i_441++;
+                          };
+                          if (!(tmpvar_440)) {
+                            tmpvar_440 = bool(1);
+                          };
+                        };
+                        lowp float tmpvar_459;
+                        tmpvar_459 = abs((t_hit_439 - tmpvar_435));
+                        if ((tmpvar_459 < 0.001)) {
+                          lowp vec3 specular_460;
+                          lowp vec3 tmpvar_461;
+                          tmpvar_461 = (incident_intensity_425 * max (0.0, dot (normal_414, tmpvar_436)));
+                          lowp float tmpvar_462;
+                          tmpvar_462 = dot (normal_414, tmpvar_436);
+                          if ((tmpvar_462 > 0.0)) {
+                            specular_460 = (specularColor_416 * pow (max (0.0, 
+                              dot ((-(tmpvar_436) - ((2.0 * 
+                                dot (-(tmpvar_436), normal_414)
+                              ) * normal_414)), -(ray_dir_413))
+                            ), 32.0));
+                          };
+                          light_sum_421 = (light_sum_421 + (tmpvar_461 * (diffuseColor_415 + specular_460)));
+                        };
+                        k_419++;
+                      };
+                      illuminationColor_418 = (illuminationColor_418 + (light_sum_421 / float(tmpvar_424)));
+                      i_417++;
+                    };
+                    tmpvar_411 = illuminationColor_418;
+                  };
+                  mirror_sample_color_315 = tmpvar_411;
+                  if (enableRefGI) {
+                    lowp vec3 point_463;
+                    point_463 = position_321;
+                    lowp vec3 tmpvar_464;
+                    highp int k_465;
+                    lowp vec3 indirect_sampling_sum_466;
+                    lowp mat3 transform_467;
+                    float tmpvar_468;
+                    tmpvar_468 = sqrt(dot (diffuseColor_323, diffuseColor_323));
+                    if ((tmpvar_468 == 0.0)) {
+                      tmpvar_464 = vec3(0.0, 0.0, 0.0);
+                    } else {
+                      lowp float tmpvar_469;
+                      tmpvar_469 = abs(normal_322.x);
+                      lowp float tmpvar_470;
+                      tmpvar_470 = abs(normal_322.y);
+                      if ((tmpvar_469 > tmpvar_470)) {
+                        lowp vec3 tmpvar_471;
+                        tmpvar_471.y = 0.0;
+                        tmpvar_471.x = normal_322.z;
+                        tmpvar_471.z = -(normal_322.x);
+                        transform_467[2] = (tmpvar_471 / sqrt((
+                          (normal_322.x * normal_322.x)
+                         + 
+                          (normal_322.z * normal_322.z)
+                        )));
+                      } else {
+                        lowp vec3 tmpvar_472;
+                        tmpvar_472.x = 0.0;
+                        tmpvar_472.y = -(normal_322.z);
+                        tmpvar_472.z = normal_322.y;
+                        transform_467[2] = (tmpvar_472 / sqrt((
+                          (normal_322.y * normal_322.y)
+                         + 
+                          (normal_322.z * normal_322.z)
+                        )));
+                      };
+                      lowp vec3 b_473;
+                      b_473 = transform_467[2];
+                      transform_467[0] = ((normal_322.yzx * b_473.zxy) - (normal_322.zxy * b_473.yzx));
+                      transform_467[1] = normal_322;
+                      k_465 = 0;
+                      while (true) {
+                        if ((k_465 >= 100)) {
+                          break;
+                        };
+                        if ((k_465 >= indirectSamples)) {
+                          break;
+                        };
+                        randomSeed += 0.02;
+                        lowp float tmpvar_474;
+                        tmpvar_474 = fract((cos(
+                          dot ((point_463.xy + randomSeed), vec2(23.14069, 2.665144))
+                        ) * 12345.68));
+                        lowp float tmpvar_475;
+                        tmpvar_475 = sqrt((1.0 - (tmpvar_474 * tmpvar_474)));
+                        randomSeed += 0.02;
+                        lowp float tmpvar_476;
+                        tmpvar_476 = (6.283186 * fract((
+                          cos(dot ((point_463.yx + randomSeed), vec2(23.14069, 2.665144)))
+                         * 12345.68)));
+                        lowp vec3 tmpvar_477;
+                        tmpvar_477.x = (cos(tmpvar_476) * tmpvar_475);
+                        tmpvar_477.y = tmpvar_474;
+                        tmpvar_477.z = (sin(tmpvar_476) * tmpvar_475);
+                        lowp vec3 tmpvar_478;
+                        tmpvar_478 = (transform_467 * tmpvar_477);
+                        lowp vec3 ray_origin_479;
+                        ray_origin_479 = point_463;
+                        lowp vec3 ray_direction_480;
+                        ray_direction_480 = tmpvar_478;
+                        lowp float t_hit_481;
+                        t_hit_481 = 10.0;
+                        lowp vec3 position_482;
+                        lowp vec3 normal_483;
+                        vec3 diffuseColor_484;
+                        vec3 specularColor_485;
+                        bool isLight_486;
+                        isLight_486 = bool(0);
+                        highp int i_487;
+                        highp int i_488;
+                        highp int i_489;
+                        i_489 = 0;
+                        while (true) {
+                          if ((i_489 >= 5)) {
+                            break;
+                          };
+                          if ((i_489 >= numSpheres)) {
+                            break;
+                          };
+                          vec3 tmpvar_490;
+                          tmpvar_490 = sphereCenters[i_489];
+                          lowp float t_hit_491;
+                          t_hit_491 = t_hit_481;
+                          bool tmpvar_492;
+                          lowp vec3 tmpvar_493;
+                          tmpvar_493 = (tmpvar_490 - ray_origin_479);
+                          lowp float tmpvar_494;
+                          tmpvar_494 = dot (ray_direction_480, ray_direction_480);
+                          lowp float tmpvar_495;
+                          tmpvar_495 = (-2.0 * dot (ray_direction_480, tmpvar_493));
+                          lowp float tmpvar_496;
+                          tmpvar_496 = ((tmpvar_495 * tmpvar_495) - ((4.0 * tmpvar_494) * (
+                            dot (tmpvar_493, tmpvar_493)
+                           - 0.64)));
+                          if ((tmpvar_496 < 0.0)) {
+                            tmpvar_492 = bool(0);
+                          } else {
+                            lowp float tmpvar_497;
+                            tmpvar_497 = sqrt(tmpvar_496);
+                            lowp float tmpvar_498;
+                            tmpvar_498 = ((-(tmpvar_495) - tmpvar_497) / (2.0 * tmpvar_494));
+                            lowp float tmpvar_499;
+                            tmpvar_499 = ((-(tmpvar_495) + tmpvar_497) / (2.0 * tmpvar_494));
+                            lowp float tmpvar_500;
+                            if ((tmpvar_498 < 0.01)) {
+                              tmpvar_500 = tmpvar_499;
+                            } else {
+                              tmpvar_500 = tmpvar_498;
+                            };
+                            if (((tmpvar_500 < t_hit_481) && (tmpvar_500 > 0.01))) {
+                              t_hit_491 = tmpvar_500;
+                              tmpvar_492 = bool(1);
+                            } else {
+                              tmpvar_492 = bool(0);
+                            };
+                          };
+                          t_hit_481 = t_hit_491;
+                          if (tmpvar_492) {
+                            position_482 = (ray_origin_479 + (ray_direction_480 * t_hit_491));
+                            normal_483 = normalize((position_482 - tmpvar_490));
+                            diffuseColor_484 = sphereColors[i_489];
+                            specularColor_485 = vec3(1.0, 1.0, 1.0);
+                          };
+                          i_489++;
+                        };
+                        i_488 = 0;
+                        while (true) {
+                          if ((i_488 >= 5)) {
+                            break;
+                          };
+                          if ((i_488 >= numPlanes)) {
+                            break;
+                          };
+                          lowp vec3 tmpvar_501;
+                          tmpvar_501 = planeNormals[i_488];
+                          lowp float t_hit_502;
+                          t_hit_502 = t_hit_481;
+                          bool tmpvar_503;
+                          tmpvar_503 = bool(1);
+                          bool tmpvar_504;
+                          lowp vec3 tmpvar_505;
+                          tmpvar_505 = (tmpvar_501 * planeOffsets[i_488]);
+                          lowp float tmpvar_506;
+                          tmpvar_506 = (((
+                            (tmpvar_505.x + tmpvar_505.y)
+                           + tmpvar_505.z) - dot (tmpvar_501, ray_origin_479)) / dot (tmpvar_501, ray_direction_480));
+                          if (((tmpvar_506 < t_hit_481) && (tmpvar_506 > 0.01))) {
+                            t_hit_502 = tmpvar_506;
+                            tmpvar_504 = bool(1);
+                            tmpvar_503 = bool(0);
+                          };
+                          if (tmpvar_503) {
+                            tmpvar_504 = bool(0);
+                            tmpvar_503 = bool(0);
+                          };
+                          t_hit_481 = t_hit_502;
+                          if (tmpvar_504) {
+                            position_482 = (ray_origin_479 + (ray_direction_480 * t_hit_502));
+                            normal_483 = tmpvar_501;
+                            diffuseColor_484 = planeColors[i_488];
+                            specularColor_485 = vec3(0.5, 0.5, 0.5);
+                          };
+                          i_488++;
+                        };
+                        i_487 = 0;
+                        while (true) {
+                          bool tmp_507;
+                          if ((i_487 >= 2)) {
+                            break;
+                          };
+                          if ((i_487 >= numLights)) {
+                            break;
+                          };
+                          vec3 tmpvar_508;
+                          tmpvar_508 = lightPos[i_487];
+                          vec2 tmpvar_509;
+                          tmpvar_509 = lightSize[i_487];
+                          tmp_507 = bool(0);
+                          float tmpvar_510;
+                          tmpvar_510 = sqrt(dot (tmpvar_509, tmpvar_509));
+                          if ((tmpvar_510 > 0.0)) {
+                            lowp float t_hit_511;
+                            t_hit_511 = t_hit_481;
+                            bool tmpvar_512;
+                            tmpvar_512 = bool(1);
+                            bool tmpvar_513;
+                            vec3 tmpvar_514;
+                            tmpvar_514 = (vec3(0.0, 1.0, 0.0) * tmpvar_508.y);
+                            lowp float tmpvar_515;
+                            tmpvar_515 = (((
+                              (tmpvar_514.x + tmpvar_514.y)
+                             + tmpvar_514.z) - ray_origin_479.y) / ray_direction_480.y);
+                            if (((tmpvar_515 < t_hit_481) && (tmpvar_515 > 0.01))) {
+                              lowp vec3 tmpvar_516;
+                              tmpvar_516 = (ray_origin_479 + (ray_direction_480 * tmpvar_515));
+                              float tmpvar_517;
+                              tmpvar_517 = sqrt(dot (tmpvar_509, tmpvar_509));
+                              if (((tmpvar_517 == 0.0) || ((
+                                ((tmpvar_516.x < (tmpvar_508.x + (tmpvar_509.x * 0.5))) && (tmpvar_516.x > (tmpvar_508.x - (tmpvar_509.x * 0.5))))
+                               && 
+                                (tmpvar_516.z < (tmpvar_508.z + (tmpvar_509.y * 0.5)))
+                              ) && (tmpvar_516.z > 
+                                (tmpvar_508.z - (tmpvar_509.y * 0.5))
+                              )))) {
+                                t_hit_511 = tmpvar_515;
+                                tmpvar_513 = bool(1);
+                                tmpvar_512 = bool(0);
+                              };
+                            };
+                            if (tmpvar_512) {
+                              tmpvar_513 = bool(0);
+                              tmpvar_512 = bool(0);
+                            };
+                            t_hit_481 = t_hit_511;
+                            tmp_507 = tmpvar_513;
+                          } else {
+                            lowp float t_hit_518;
+                            t_hit_518 = t_hit_481;
+                            bool tmpvar_519;
+                            lowp vec3 tmpvar_520;
+                            tmpvar_520 = (tmpvar_508 - ray_origin_479);
+                            lowp float tmpvar_521;
+                            tmpvar_521 = dot (ray_direction_480, ray_direction_480);
+                            lowp float tmpvar_522;
+                            tmpvar_522 = (-2.0 * dot (ray_direction_480, tmpvar_520));
+                            lowp float tmpvar_523;
+                            tmpvar_523 = ((tmpvar_522 * tmpvar_522) - ((4.0 * tmpvar_521) * (
+                              dot (tmpvar_520, tmpvar_520)
+                             - 0.01)));
+                            if ((tmpvar_523 < 0.0)) {
+                              tmpvar_519 = bool(0);
+                            } else {
+                              lowp float tmpvar_524;
+                              tmpvar_524 = sqrt(tmpvar_523);
+                              lowp float tmpvar_525;
+                              tmpvar_525 = ((-(tmpvar_522) - tmpvar_524) / (2.0 * tmpvar_521));
+                              lowp float tmpvar_526;
+                              tmpvar_526 = ((-(tmpvar_522) + tmpvar_524) / (2.0 * tmpvar_521));
+                              lowp float tmpvar_527;
+                              if ((tmpvar_525 < 0.01)) {
+                                tmpvar_527 = tmpvar_526;
+                              } else {
+                                tmpvar_527 = tmpvar_525;
+                              };
+                              if (((tmpvar_527 < t_hit_481) && (tmpvar_527 > 0.01))) {
+                                t_hit_518 = tmpvar_527;
+                                tmpvar_519 = bool(1);
+                              } else {
+                                tmpvar_519 = bool(0);
+                              };
+                            };
+                            t_hit_481 = t_hit_518;
+                            tmp_507 = tmpvar_519;
+                          };
+                          if (tmp_507) {
+                            diffuseColor_484 = lightIntensity[i_487];
+                            isLight_486 = bool(1);
+                          };
+                          i_487++;
+                        };
+                        lowp vec3 tmpvar_528;
+                        if (isLight_486) {
+                          tmpvar_528 = vec3(0.0, 0.0, 0.0);
+                        } else {
+                          lowp vec3 point_529;
+                          point_529 = position_482;
+                          lowp vec3 ray_dir_530;
+                          ray_dir_530 = tmpvar_478;
+                          lowp vec3 normal_531;
+                          normal_531 = normal_483;
+                          vec3 diffuseColor_532;
+                          diffuseColor_532 = diffuseColor_484;
+                          vec3 specularColor_533;
+                          specularColor_533 = specularColor_485;
+                          highp int i_534;
+                          lowp vec3 illuminationColor_535;
+                          i_534 = 0;
+                          while (true) {
+                            highp int k_536;
+                            highp int areaShadowSamples_537;
+                            lowp vec3 light_sum_538;
+                            if ((i_534 >= 2)) {
+                              break;
+                            };
+                            if ((i_534 >= numLights)) {
+                              break;
+                            };
+                            float tmpvar_539;
+                            vec2 x_540;
+                            x_540 = lightSize[i_534];
+                            tmpvar_539 = sqrt(dot (x_540, x_540));
+                            highp int tmpvar_541;
+                            if ((tmpvar_539 > 0.0)) {
+                              tmpvar_541 = shadowSamples;
+                            } else {
+                              tmpvar_541 = 1;
+                            };
+                            areaShadowSamples_537 = tmpvar_541;
+                            k_536 = 0;
+                            while (true) {
+                              lowp vec3 incident_intensity_542;
+                              if ((k_536 >= 49)) {
+                                break;
+                              };
+                              if ((k_536 >= areaShadowSamples_537)) {
+                                break;
+                              };
+                              vec3 position_543;
+                              position_543 = lightPos[i_534];
+                              vec3 intensity_544;
+                              intensity_544 = lightIntensity[i_534];
+                              vec2 size_545;
+                              size_545 = lightSize[i_534];
+                              float sample_i_546;
+                              sample_i_546 = float(k_536);
+                              lowp vec3 vec_to_light_547;
+                              float tmpvar_548;
+                              tmpvar_548 = sqrt(dot (size_545, size_545));
+                              if ((tmpvar_548 > 0.0)) {
+                                float tmpvar_549;
+                                tmpvar_549 = (1.0/(shadowDim));
+                                randomSeed += 0.02;
+                                lowp float tmpvar_550;
+                                tmpvar_550 = ((size_545.x * tmpvar_549) * ((float(mod (sample_i_546, shadowDim))) + fract(
+                                  (cos(dot ((point_529.xy + randomSeed), vec2(23.14069, 2.665144))) * 12345.68)
+                                )));
+                                randomSeed += 0.02;
+                                lowp vec3 tmpvar_551;
+                                tmpvar_551.x = ((position_543.x - (size_545.x * 0.5)) + tmpvar_550);
+                                tmpvar_551.y = position_543.y;
+                                tmpvar_551.z = ((position_543.z - (size_545.y * 0.5)) + ((size_545.y * tmpvar_549) * (
+                                  floor((sample_i_546 * tmpvar_549))
+                                 + 
+                                  fract((cos(dot (
+                                    (point_529.yx + randomSeed)
+                                  , vec2(23.14069, 2.665144))) * 12345.68))
+                                )));
+                                vec_to_light_547 = (tmpvar_551 - point_529);
+                              } else {
+                                vec_to_light_547 = (position_543 - point_529);
+                              };
+                              lowp float tmpvar_552;
+                              tmpvar_552 = sqrt(dot (vec_to_light_547, vec_to_light_547));
+                              lowp vec3 tmpvar_553;
+                              tmpvar_553 = normalize(vec_to_light_547);
+                              vec_to_light_547 = tmpvar_553;
+                              incident_intensity_542 = (intensity_544 * (1.0/((
+                                (0.1 * (tmpvar_552 * tmpvar_552))
+                               + 
+                                (0.4 * tmpvar_552)
+                              ))));
+                              lowp vec3 ray_origin_554;
+                              ray_origin_554 = point_529;
+                              lowp vec3 ray_direction_555;
+                              ray_direction_555 = tmpvar_553;
+                              lowp float t_hit_556;
+                              t_hit_556 = tmpvar_552;
+                              bool tmpvar_557;
+                              tmpvar_557 = bool(0);
+                              highp int i_558;
+                              highp int i_559;
+                              i_559 = 0;
+                              while (true) {
+                                if ((i_559 >= 5)) {
+                                  break;
+                                };
+                                if ((i_559 >= numSpheres)) {
+                                  break;
+                                };
+                                lowp float t_hit_560;
+                                t_hit_560 = t_hit_556;
+                                bool tmpvar_561;
+                                lowp vec3 tmpvar_562;
+                                tmpvar_562 = (sphereCenters[i_559] - ray_origin_554);
+                                lowp float tmpvar_563;
+                                tmpvar_563 = dot (ray_direction_555, ray_direction_555);
+                                lowp float tmpvar_564;
+                                tmpvar_564 = (-2.0 * dot (ray_direction_555, tmpvar_562));
+                                lowp float tmpvar_565;
+                                tmpvar_565 = ((tmpvar_564 * tmpvar_564) - ((4.0 * tmpvar_563) * (
+                                  dot (tmpvar_562, tmpvar_562)
+                                 - 0.64)));
+                                if ((tmpvar_565 < 0.0)) {
+                                  tmpvar_561 = bool(0);
+                                } else {
+                                  lowp float tmpvar_566;
+                                  tmpvar_566 = sqrt(tmpvar_565);
+                                  lowp float tmpvar_567;
+                                  tmpvar_567 = ((-(tmpvar_564) - tmpvar_566) / (2.0 * tmpvar_563));
+                                  lowp float tmpvar_568;
+                                  tmpvar_568 = ((-(tmpvar_564) + tmpvar_566) / (2.0 * tmpvar_563));
+                                  lowp float tmpvar_569;
+                                  if ((tmpvar_567 < 0.01)) {
+                                    tmpvar_569 = tmpvar_568;
+                                  } else {
+                                    tmpvar_569 = tmpvar_567;
+                                  };
+                                  if (((tmpvar_569 < t_hit_556) && (tmpvar_569 > 0.01))) {
+                                    t_hit_560 = tmpvar_569;
+                                    tmpvar_561 = bool(1);
+                                  } else {
+                                    tmpvar_561 = bool(0);
+                                  };
+                                };
+                                t_hit_556 = t_hit_560;
+                                if (tmpvar_561) {
+                                  tmpvar_557 = bool(1);
+                                  break;
+                                };
+                                i_559++;
+                              };
+                              if (!(tmpvar_557)) {
+                                i_558 = 0;
+                                while (true) {
+                                  if ((i_558 >= 5)) {
+                                    break;
+                                  };
+                                  if ((i_558 >= numPlanes)) {
+                                    break;
+                                  };
+                                  vec3 normal_570;
+                                  normal_570 = planeNormals[i_558];
+                                  lowp float t_hit_571;
+                                  t_hit_571 = t_hit_556;
+                                  bool tmpvar_572;
+                                  tmpvar_572 = bool(1);
+                                  bool tmpvar_573;
+                                  vec3 tmpvar_574;
+                                  tmpvar_574 = (normal_570 * planeOffsets[i_558]);
+                                  lowp float tmpvar_575;
+                                  tmpvar_575 = (((
+                                    (tmpvar_574.x + tmpvar_574.y)
+                                   + tmpvar_574.z) - dot (normal_570, ray_origin_554)) / dot (normal_570, ray_direction_555));
+                                  if (((tmpvar_575 < t_hit_556) && (tmpvar_575 > 0.01))) {
+                                    t_hit_571 = tmpvar_575;
+                                    tmpvar_573 = bool(1);
+                                    tmpvar_572 = bool(0);
+                                  };
+                                  if (tmpvar_572) {
+                                    tmpvar_573 = bool(0);
+                                    tmpvar_572 = bool(0);
+                                  };
+                                  t_hit_556 = t_hit_571;
+                                  if (tmpvar_573) {
+                                    tmpvar_557 = bool(1);
+                                    break;
+                                  };
+                                  i_558++;
+                                };
+                                if (!(tmpvar_557)) {
+                                  tmpvar_557 = bool(1);
+                                };
+                              };
+                              lowp float tmpvar_576;
+                              tmpvar_576 = abs((t_hit_556 - tmpvar_552));
+                              if ((tmpvar_576 < 0.001)) {
+                                lowp vec3 specular_577;
+                                lowp vec3 tmpvar_578;
+                                tmpvar_578 = (incident_intensity_542 * max (0.0, dot (normal_531, tmpvar_553)));
+                                lowp float tmpvar_579;
+                                tmpvar_579 = dot (normal_531, tmpvar_553);
+                                if ((tmpvar_579 > 0.0)) {
+                                  specular_577 = (specularColor_533 * pow (max (0.0, 
+                                    dot ((-(tmpvar_553) - ((2.0 * 
+                                      dot (-(tmpvar_553), normal_531)
+                                    ) * normal_531)), -(ray_dir_530))
+                                  ), 32.0));
+                                };
+                                light_sum_538 = (light_sum_538 + (tmpvar_578 * (diffuseColor_532 + specular_577)));
+                              };
+                              k_536++;
+                            };
+                            illuminationColor_535 = (illuminationColor_535 + (light_sum_538 / float(tmpvar_541)));
+                            i_534++;
+                          };
+                          tmpvar_528 = (tmpvar_474 * illuminationColor_535);
+                        };
+                        indirect_sampling_sum_466 = (indirect_sampling_sum_466 + tmpvar_528);
+                        k_465++;
+                      };
+                      tmpvar_464 = (((2.0 * indirect_sampling_sum_466) / float(indirectSamples)) * diffuseColor_323);
+                    };
+                    mirror_sample_color_315 = (tmpvar_411 + tmpvar_464);
+                  };
+                  reflectionSum_314 = (reflectionSum_314 + (mirror_sample_color_315 * reflectiveColor_312));
+                  origin_309 = position_321;
+                  rayDir_310 = tmpvar_317;
+                  reflectiveColor_312 = (reflectiveColor_325 * reflectiveColor_312);
+                };
+                pixelColor_1 = (pixelColor_1 + reflectionSum_314);
+              };
+              lowp vec4 tmpvar_580;
+              tmpvar_580.w = 1.0;
+              tmpvar_580.xyz = pixelColor_1;
+              fragColor = tmpvar_580;
             }
             
-            vec3 shadePhong(vec3 ray_direction, vec3 normal, vec3 dir_to_light, vec3 incident_intensity, vec3 diffuse_color, vec3 specular_color) {
-                vec3 light_incident = incident_intensity * max(0.0, dot(normal, dir_to_light));	        // Brightness depends on the angle between light and normal
             
-                vec3 specular;
-                if (dot(normal, dir_to_light) > 0.0) {												    // Only add specular if light is on the same side as normal
-                    vec3 vect_reflection = -dir_to_light - 2.0 * dot(-dir_to_light, normal) * normal;	// Reflection vector pointing away from object
-                    vec3 vect_camera = -ray_direction;													// Vector pointing from object to camera
-                    float reflection_intensity = pow(max(0.0, dot(vect_reflection, vect_camera)), specular_exponent);// How closely the reflection vector points to the camera = intensity
-                    specular = specular_color * reflection_intensity;
-                }
-            
-                return light_incident * (diffuse_color + specular);
-            }
-            
-            // Calculates and returns specular and diffuse illumination from all lights on a given point
-            vec3 illumination(vec3 point, vec3 ray_dir, vec3 normal, vec3 diffuseColor, vec3 specularColor) {
-                vec3 illuminationColor;
-            
-                for (int i = 0; i < MAX_LIGHTS; i++) {
-                    if (i >= numLights) break;
-                    vec3 light_sum;
-                    int areaShadowSamples = length(lightSize[i]) > 0.0 ? shadowSamples : 1; // If the size of the light is zero, it is point light and one sample is enough
-                    
-                    for (int sample = 0; sample < MAX_SHADOW_SAMPLES; sample++) {
-                        if (sample >= areaShadowSamples) break;
-                        vec3 incident_intensity, dir_to_light;
-                        float light_distance;
-                        getIncidentIntensity(point, lightPos[i], lightIntensity[i], lightSize[i], float(sample), light_distance, dir_to_light, incident_intensity);
-                        
-                        float t_shadowHit = light_distance;
-                        intersectShadowRay(point, dir_to_light, t_shadowHit, 0.01);
-            
-                        if (abs(t_shadowHit - light_distance) < EPSILON) {
-                            light_sum += shadePhong(ray_dir, normal, dir_to_light, incident_intensity, diffuseColor, specularColor);
-                        }
-                    }
-            
-                    illuminationColor += light_sum / float(areaShadowSamples);
-                }
-                return illuminationColor;
-            }
-            
-            // Calculates and returns indirect illumination on a given point
-            // uses only one bounce because of exponential performance hit
-            vec3 indirectIllumination(vec3 point, vec3 normal, vec3 diffuseColor) {
-                if (length(diffuseColor) == 0.0) return vec3(0,0,0); // don't do useless calculations if the surface doesn't have a diffuse color
-            
-                mat3 transform;
-                if (abs(normal.x) > abs(normal.y))
-                    transform[2] = vec3(normal.z, 0, -normal.x) / sqrt(normal.x * normal.x + normal.z * normal.z);
-                else
-                    transform[2] = vec3(0, -normal.z, normal.y) / sqrt(normal.y * normal.y + normal.z * normal.z);
-                transform[0] = cross(normal, transform[2]);
-                transform[1] = normal;
-            
-                // Sample rays uniformly over hemisphere with spherical coordinates
-                vec3 indirect_sampling_sum;
-                for (int sample = 0; sample < MAX_GISAMPLES; sample++) {
-                    if (sample >= indirectSamples) break;
-                    float z = random(point.xy);
-                    float radius = sqrt(1.0 - z * z);						    // uniform radius on hemisphere
-                    float theta = 2.0 * PI * random(point.yx);	                // uniform angle on [0, 2*pi]
-                    vec3 coords = vec3(cos(theta)*radius, z, sin(theta)*radius);// get cartesian coordinates
-            
-                    // Transform point to world space
-                    vec3 indirectDir = transform * coords;
-                    float t_indirectHit = 10.0;
-                    vec3 indirectHitPoint, indirectDiffuseColor, indirectSpecularColor, indirectReflectiveColor, indirectNormal;
-                    bool isLight = false;
-            
-                    // Intersect this bounced ray (lights are considered black, because their illumination is already taken into account) and get direct illumination from this point
-                    intersect(point, indirectDir, t_indirectHit, 0.01, indirectHitPoint, indirectNormal, indirectDiffuseColor, indirectSpecularColor, indirectReflectiveColor, isLight);
-                    indirect_sampling_sum += isLight ? vec3(0,0,0) : z * illumination(indirectHitPoint, indirectDir, indirectNormal, indirectDiffuseColor, indirectSpecularColor);
-                }
-                // Return the scaled indirect light
-                return ((2.0 * indirect_sampling_sum / float(indirectSamples)) * diffuseColor);
-            }
-            
-            // Calculates and returns mirror reflections on a given point
-            vec3 reflectionIllumination(vec3 origin, vec3 rayDir, vec3 normal, vec3 reflectiveColor) {
-                vec3 reflectionSum, mirrorDir, bounceDiffuseColor, bounceSpecularColor, bounceReflectiveColor, bounceHitPoint;
-                for (int i = 0; i < MAX_RAYBOUNCES; i++) {
-                    if (i >= rayBounces || length(reflectiveColor) == 0.0) break; // Stop if we reach max number of bounces or hit material that is not reflective
-            
-                    // Trace the mirror ray and add the result to pixel
-                    mirrorDir = vec3(rayDir - 2.0 * dot(rayDir, normal) * normal); // Get the direction of the reflected ray
-                    float t_bounceHit = 50.0;
-                    bool isLight = false;
-                    intersect(origin, mirrorDir, t_bounceHit, 0.01, bounceHitPoint, normal, bounceDiffuseColor, bounceSpecularColor, bounceReflectiveColor, isLight);
-                    vec3 mirror_sample_color = isLight ? bounceDiffuseColor : illumination(bounceHitPoint, mirrorDir, normal, bounceDiffuseColor, bounceSpecularColor);
-                    
-                    if (enableRefGI) // Add indirect illumination to reflection
-                        mirror_sample_color += indirectIllumination(bounceHitPoint, normal, bounceDiffuseColor);
-            
-                    reflectionSum += mirror_sample_color * reflectiveColor;
-                    origin = bounceHitPoint;
-                    rayDir = mirrorDir;
-                    reflectiveColor = bounceReflectiveColor * reflectiveColor;  // Successive ray colors are affected by each reflective surface's color
-                }
-                return reflectionSum;
-            }
-            
-            
-            void main() {
-                vec3 ray_dir = normalize(ray);
-                float t_hit = length(ray); // The far clipping distance
-                vec3 pixelColor, diffuseColor, specularColor, reflectiveColor, normal, point;
-                bool isLight = false;
-            
-                // intersect the ray with objects (tmin is 0, because vertex shader places the origin in near clipping distance)
-                intersect(origin, ray_dir, t_hit, 0.0, point, normal, diffuseColor, specularColor, reflectiveColor, isLight);
-            
-                if (isLight) {  // If the ray hit a light, return its color because they dont have any other properties than surface color
-                    gl_FragColor = vec4(diffuseColor, 1.0);
-                    return;
-                }
-            
-                // Ambient light
-                if (!enableGI)
-                    pixelColor += ambientLight * diffuseColor;
-            
-                // ==== DIRECT ILLUMINATION ====
-                pixelColor += illumination(point, ray_dir, normal, diffuseColor, specularColor);
-            
-                // ==== INDIRECT ILLUMINATION ====
-                if (enableGI)
-                    pixelColor += indirectIllumination(point, normal, diffuseColor);
-            
-                // ==== MIRROR REFLECTION ====
-                if (rayBounces > 0 && length(reflectiveColor) > 0.0)
-                    pixelColor += reflectionIllumination(point, ray_dir, normal, reflectiveColor);
-            
-                gl_FragColor = vec4(pixelColor, 1.0);
-            }
         </script>
           
         <script src="webgl-utils.js"></script>

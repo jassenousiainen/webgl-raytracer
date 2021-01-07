@@ -1,11 +1,12 @@
 # WebGL Raytracer
-A simple realtime raytracer made with JavaScript and WebGL (GLSL). Requires browser with WebGL 1.0 support (developed and tested on Chrome v87) and a somewhat powerful GPU.
+A simple realtime raytracer made with JavaScript and WebGL. Requires browser with WebGL 2.0 support (developed and tested on Chrome v87) and a somewhat powerful GPU.
 
 The ray tracing happens completely in the fragment shader, which is found in the file `fragment.glsl`. The vertex shader only calculates the origin and direction of the rays.
 The contents of both of these shader files are then just copied to inline HTML.
+The program uses no vertex buffers, instead it uses the indices of the three vertices of the fullscreen triangle.
 
 ## Features
-- Fully realtime ray-traced, rasterization is only used for the full screen quad
+- Fully realtime ray-traced, rasterization is only used for the full screen triangle
 - Intersection for sphere and plane primitives (and rectangles with currently only fixed direction)
 - Phong shading model for diffuse and specular illumination
 - Supports point lights and rectangle area lights with customizable size
@@ -14,4 +15,4 @@ The contents of both of these shader files are then just copied to inline HTML.
 - Mirror reflections with customizable number of bounces (also GI in reflections)
 - Free-fly perspective camera, use WASD -keys to move and mouse while holding left mouse button to look around
 
-I have made this application for the purpose of learning WebGL, so there might be multiple bugs and errors, and thus the code should not be used as a reference.
+Note that I have made this application just for the purpose of learning WebGL, so there might be multiple bugs and errors.

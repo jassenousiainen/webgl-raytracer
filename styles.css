@@ -49,16 +49,17 @@ canvas {
     align-items: center;
 }
 
-.controls .sliders {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
+table.sliders {
+    width: 100%;
 }
 
-.controls .sliders label {
-    flex: 0 30px;
+.sliders input {
+    width: 100%;
 }
 
-.controls .sliders input {
-    flex: 0 190px;
+#fps-container {
+    position: absolute;
+    top: 1em;
+    left: 1em;
+    color: white;
 }

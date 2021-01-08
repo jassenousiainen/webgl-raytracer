@@ -3,7 +3,7 @@ precision mediump float;
 
 #define MAX_LIGHTS 2
 #define MAX_SPHERES 5
-#define MAX_PLANES 5
+#define MAX_PLANES 6
 #define MAX_SHADOW_SAMPLES 49
 #define MAX_RAYBOUNCES 5
 #define MAX_GISAMPLES 100
@@ -38,6 +38,8 @@ uniform vec3 ambientLight;
 uniform bool enableGI;
 uniform bool enableRefGI;
 uniform int indirectSamples;
+uniform bool enablePlaneBacksides;
+uniform bool enablePlaneMirrors;
 
 in lowp vec3 origin;
 in lowp vec3 ray;
@@ -105,25 +107,20 @@ bool intersect(vec3 ray_origin,
             float tmin,
             out vec3 position,
             out vec3 normal,
-            out vec3 diffuseColor,
-            out vec3 specularColor,
-            out vec3 reflectiveColor,
+            inout vec3 diffuseColor,
+            inout vec3 specularColor,
+            inout vec3 reflectiveColor,
             inout bool isLight)
 {
-    bool intersected = false;
-
+    int intersected = 0;
+    int idx = 0;
+    
     // Intersect spheres
     for (int i = 0; i < MAX_SPHERES; i++) {
         if (i >= numSpheres) break;
-        vec3 center = sphereCenters[i];
-	    bool tmp = intersectSphere(ray_origin, ray_direction, center, 0.8, tmin, t_hit);
-        if (tmp) {
-            position = ray_origin + ray_direction * t_hit;
-		    normal = normalize(position - center);
-            diffuseColor = sphereColors[i];
-            specularColor = vec3(1.0, 1.0, 1.0);
-            reflectiveColor = reflectiveColors[i];
-			intersected = true;
+        if (intersectSphere(ray_origin, ray_direction, sphereCenters[i], 0.8, tmin, t_hit)) {
+            idx = i;
+			intersected = 1;
         }
     }
 
@@ -131,14 +128,13 @@ bool intersect(vec3 ray_origin,
     for (int i = 0; i < MAX_PLANES; i++) {
         if (i >= numPlanes) break;
         vec3 planeNormal = planeNormals[i];
-	    bool tmp = intersectPlane(ray_origin, ray_direction, planeOffsets[i], planeNormal, vec3(0,0,0), vec2(0,0), tmin, t_hit);
+        bool tmp = false;
+        if (enablePlaneBacksides || dot(ray_direction, planeNormal) < 0.0)
+	        tmp = intersectPlane(ray_origin, ray_direction, planeOffsets[i], planeNormal, vec3(0,0,0), vec2(0,0), tmin, t_hit);
         if (tmp) {
-            position = ray_origin + ray_direction * t_hit;
 		    normal = planeNormal;
-            diffuseColor = planeColors[i];
-            specularColor = vec3(0.5, 0.5, 0.5);
-            reflectiveColor =vec3(0.0, 0.0, 0.0);
-			intersected = true;
+            idx = i;
+			intersected = 2;
         }
     }
 
@@ -153,28 +149,54 @@ bool intersect(vec3 ray_origin,
         else
             tmp = intersectSphere(ray_origin, ray_direction, center, 0.1, tmin, t_hit);
         if (tmp) {
-            diffuseColor = lightIntensity[i];
-            intersected = true;
-            isLight = true;
+            idx = i;
+            intersected = 3;
         }
     }
 
-    return intersected;
+    position = ray_origin + ray_direction * t_hit;
+
+    // Optimization: make only one color lookup for each intersection
+    if (intersected == 1) {
+        diffuseColor = sphereColors[idx];
+        specularColor = vec3(1.0, 1.0, 1.0);
+        reflectiveColor = reflectiveColors[idx];
+		normal = normalize(position - sphereCenters[idx]);
+        if (dot(normal, -ray_direction) < 0.0) // Backside shading: flip normal if ray and normal are on different sides
+		    normal *= -1.0;
+    }
+    else if (intersected == 2) {
+        if (enablePlaneMirrors) {
+            diffuseColor = vec3(0.1, 0.1, 0.1);
+            specularColor = vec3(0, 0, 0);
+            reflectiveColor = vec3(1.0, 1.0, 1.0);
+        } else {
+            diffuseColor = planeColors[idx];
+            specularColor = vec3(0.5, 0.5, 0.5);
+            reflectiveColor = vec3(0, 0, 0);
+        }
+        if (dot(normal, -ray_direction) < 0.0) // Backside shading: flip normal if ray and normal are on different sides
+		    normal *= -1.0;
+    }
+    else if (intersected == 3) {
+        diffuseColor = lightIntensity[idx];
+        isLight = true;
+    }
+
+
+    return intersected != 0;
 }
 
 // Faster intersect function for shadows
 bool intersectShadowRay(vec3 ray_origin, vec3 ray_direction, inout float t_hit, float tmin) {
     for (int i = 0; i < MAX_SPHERES; i++) {
         if (i >= numSpheres) break;
-        vec3 center = sphereCenters[i];
-	    if (intersectSphere(ray_origin, ray_direction, center, 0.8, tmin, t_hit))
+	    if (intersectSphere(ray_origin, ray_direction, sphereCenters[i], 0.8, tmin, t_hit))
             return true;
     }
     for (int i = 0; i < MAX_PLANES; i++) {
         if (i >= numPlanes) break;
-        float planeOffset = planeOffsets[i];
-        vec3 planeNormal = planeNormals[i];
-	    if (intersectPlane(ray_origin, ray_direction, planeOffset, planeNormal, vec3(0,0,0), vec2(0,0), tmin, t_hit))
+	    if (intersectPlane(ray_origin, ray_direction, planeOffsets[i], planeNormals[i], vec3(0,0,0), vec2(0,0), tmin, t_hit))
             return true;
     }
     return false;
@@ -202,18 +224,18 @@ void getIncidentIntensity(vec3 p, vec3 position, vec3 intensity, vec2 size, floa
     incident_intensity = intensity * attenuation;
 }
 
-vec3 shadePhong(vec3 ray_direction, vec3 normal, vec3 dir_to_light, vec3 incident_intensity, vec3 diffuse_color, vec3 specular_color) {
-    vec3 light_incident = incident_intensity * max(0.0, dot(normal, dir_to_light));	        // Brightness depends on the angle between light and normal
-
-	vec3 specular;
-	if (dot(normal, dir_to_light) > 0.0) {												    // Only add specular if light is on the same side as normal
+vec3 shadePhong(vec3 ray_direction, vec3 normal, vec3 dir_to_light, vec3 incident_intensity, vec3 diffuse_color, vec3 specular_color) {        
+	if (dot(normal, dir_to_light) > 0.0) {                                                  // Only add light if light is on the same side as normal
+        vec3 light_incident = incident_intensity * max(0.0, dot(normal, dir_to_light));     // Brightness depends on the angle between light and normal		
 		vec3 vect_reflection = -dir_to_light - 2.0 * dot(-dir_to_light, normal) * normal;	// Reflection vector pointing away from object
 		vec3 vect_camera = -ray_direction;													// Vector pointing from object to camera
 		float reflection_intensity = pow(max(0.0, dot(vect_reflection, vect_camera)), specular_exponent);// How closely the reflection vector points to the camera = intensity
-		specular = specular_color * reflection_intensity;
+		vec3 specular = specular_color * reflection_intensity;
+
+        return light_incident * (diffuse_color + specular);
 	}
 
-    return light_incident * (diffuse_color + specular);
+    return vec3(0, 0, 0);
 }
 
 // Calculates and returns specular and diffuse illumination from all lights on a given point
@@ -222,14 +244,17 @@ vec3 illumination(vec3 point, vec3 ray_dir, vec3 normal, vec3 diffuseColor, vec3
 
     for (int i = 0; i < MAX_LIGHTS; i++) {
         if (i >= numLights) break;
-        vec3 light_sum;
         int areaShadowSamples = length(lightSize[i]) > 0.0 ? shadowSamples : 1; // If the size of the light is zero, it is point light and one sample is enough
+        vec3 lightPos = lightPos[i];
+        vec3 lightIntensity = lightIntensity[i];
+        vec2 lightSize = lightSize[i];
+        vec3 light_sum;
         
         for (int k = 0; k < MAX_SHADOW_SAMPLES; k++) {
             if (k >= areaShadowSamples) break;
             vec3 incident_intensity, dir_to_light;
             float light_distance;
-            getIncidentIntensity(point, lightPos[i], lightIntensity[i], lightSize[i], float(k), light_distance, dir_to_light, incident_intensity);
+            getIncidentIntensity(point, lightPos, lightIntensity, lightSize, float(k), light_distance, dir_to_light, incident_intensity);
             
             float t_shadowHit = light_distance;
             intersectShadowRay(point, dir_to_light, t_shadowHit, 0.01);
@@ -282,7 +307,7 @@ vec3 indirectIllumination(vec3 point, vec3 normal, vec3 diffuseColor) {
 
 // Calculates and returns mirror reflections on a given point
 vec3 reflectionIllumination(vec3 origin, vec3 rayDir, vec3 normal, vec3 reflectiveColor) {
-    vec3 reflectionSum, mirrorDir, bounceDiffuseColor, bounceSpecularColor, bounceReflectiveColor, bounceHitPoint;
+    vec3 reflectionSum, mirrorDir;
     for (int i = 0; i < MAX_RAYBOUNCES; i++) {
         if (i >= rayBounces || length(reflectiveColor) == 0.0) break; // Stop if we reach max number of bounces or hit material that is not reflective
 
@@ -290,7 +315,9 @@ vec3 reflectionIllumination(vec3 origin, vec3 rayDir, vec3 normal, vec3 reflecti
         mirrorDir = vec3(rayDir - 2.0 * dot(rayDir, normal) * normal); // Get the direction of the reflected ray
         float t_bounceHit = 50.0;
         bool isLight = false;
+        vec3 bounceDiffuseColor, bounceSpecularColor, bounceReflectiveColor, bounceHitPoint;
         intersect(origin, mirrorDir, t_bounceHit, 0.01, bounceHitPoint, normal, bounceDiffuseColor, bounceSpecularColor, bounceReflectiveColor, isLight);
+        
         vec3 mirror_sample_color = isLight ? bounceDiffuseColor : illumination(bounceHitPoint, mirrorDir, normal, bounceDiffuseColor, bounceSpecularColor);
         
         if (enableRefGI) // Add indirect illumination to reflection

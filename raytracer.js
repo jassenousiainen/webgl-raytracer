@@ -38,46 +38,10 @@ function createProgram(gl, vertexShader, fragmentShader) {
 var program = createProgram(gl, vertexShader, fragmentShader);
 
 
-function addLightInputs(index, lightArr) {
-    const container = document.getElementById("lightcontrols");
-    htmlStr = `
-        <br>
-        <b>light ${index+1}</b><br>
-        <div class="sliders">
-            <label>Bright:</label><input type="range" min="0" max="10" value="${lightArr[index].brightness}" step="0.1" id="lightbrightness${index}">
-            <label>r:</label><input type="range" min="0" max="1" value="1" step="0.1" id="lightred${index}">
-            <label>g:</label><input type="range" min="0" max="1" value="1" step="0.1" id="lightgreen${index}">
-            <label>b:</label><input type="range" min="0" max="1" value="1" step="0.1" id="lightblue${index}">
-            <label>sizeX:</label><input type="range" min="0" max="3" value="${lightArr[index].sizeX}" step="0.1" id="lightsizex${index}">
-            <label>sizeY:</label><input type="range" min="0" max="3" value="${lightArr[index].sizeY}" step="0.1" id="lightsizey${index}">
-        </div>`;
-    container.insertAdjacentHTML('beforeend', htmlStr);
-}
-
 // Variables to hold the state of the world
-let lights = []
-lights.push({x: 0, y: 4.9999, z: 0, sizeX: 2, sizeY: 2, brightness: 2.5})
-lights.push({x: 0, y: 4.0, z: 0, sizeX: 0.3, sizeY: 0.3, brightness: 0.3})
-const numLights = lights.length
-for (l = 0; l < numLights; l++) {
-    addLightInputs(l, lights);
-}
 
-let spheres = [];
-spheres.push({x: 0, y: 0, z: 0, r: 0, g: 0, b: 0, rr: 1, rg: 1, rb: 1})
-spheres.push({x: 1.25, y: 1.25, z: 1.25, r: 0, g: 1.0, b: 0, rr: 0, rg: 0.1, rb: 0})
-spheres.push({x: -1.25, y: -1.25, z: 1.25, r: 0, g: 0, b: 0, rr: 0, rg: 1, rb: 1})
-spheres.push({x: -1.25, y: 1.25, z: -1.25, r: 0, g: 0, b: 1.0, rr: 0, rg: 0, rb: 0.5})
-spheres.push({x: 1.25, y: -1.25, z: -1.25, r: 0, g: 0, b: 0, rr: 1, rg: 0, rb: 1})
+let spheres = WorldState.spheres;
 const numSpheres = spheres.length
-
-let planes = []
-planes.push({x: 0.0, y: 1.0, z: 0, r: 1.0, g: 1.0, b: 1.0, offset: -2.05})  // floor
-planes.push({x: -1.0, y: 0.0, z: 0, r: 1.0, g: 0.3, b: 0.3, offset: 4.5})   // right wall
-planes.push({x: 1.0, y: 0.0, z: 0, r: 0.3, g: 1.0, b: 0.3, offset: -4.5})   // left wall
-planes.push({x: 0, y: 0, z: 1.0, r: 1.0, g: 1.0, b: 1.0, offset: -5.0})     // back wall
-planes.push({x: 0, y: -1.0, z: 0.0, r: 1.0, g: 1.0, b: 1.0, offset: 5.0})   // ceiling
-const numPlanes = planes.length
 
 let near = 0.1
 let far = 50
@@ -97,7 +61,7 @@ let keyDownA = false
 let keyDownS = false
 let keyDownD = false
 let reflectionBounces = 3;
-let lightRot = 0
+let enableAreaLights = true;
 let lightPos = vec3.create()
 let shadowDim = 3;
 let xmove = 0
@@ -110,7 +74,8 @@ const enableRefGIbutton = document.getElementById('enableRefGI');
 const indirectSamplesElem = document.getElementById('indirectsamples');
 const shadowSamplesElem = document.getElementById('shadowsamples');
 const reflectionBouncesElem = document.getElementById('reflectionbounces');
-const areaLightsElem = document.getElementById('arealightsenable');
+const planeBacksidesElem = document.getElementById('planebacksides');
+const planeMirrorsElem = document.getElementById('enablemirrorworld');
 
 
 // ========== RENDERING ==========
@@ -162,50 +127,48 @@ function drawScene(now) {
     gl.uniform1f(gl.getUniformLocation(program, 'far'), far)
     gl.uniformMatrix4fv(gl.getUniformLocation(program, 'invprojview'), false, inverseProjectionViewMatrix)
     gl.uniform3f(gl.getUniformLocation(program, 'ambientLight'), 0.02, 0.02, 0.02)
-    gl.uniform1i(gl.getUniformLocation(program, 'numLights'), numLights)
     gl.uniform1i(gl.getUniformLocation(program, 'numSpheres'), numSpheres)
-    gl.uniform1i(gl.getUniformLocation(program, 'numPlanes'), numPlanes)
     gl.uniform1i(gl.getUniformLocation(program, 'rayBounces'), reflectionBouncesElem.value)
     gl.uniform1i(gl.getUniformLocation(program, 'enableGI'), enableGIbutton.checked ? 1 : 0)
     gl.uniform1i(gl.getUniformLocation(program, 'enableRefGI'), enableRefGIbutton.checked ? 1 : 0)
     gl.uniform1i(gl.getUniformLocation(program, 'indirectSamples'), indirectSamplesElem.value)
-
+    gl.uniform1i(gl.getUniformLocation(program, 'enablePlaneBacksides'), planeBacksidesElem.checked)
+    gl.uniform1i(gl.getUniformLocation(program, 'enablePlaneMirrors'), planeMirrorsElem.checked)
     shadowDim = Math.floor(Math.sqrt(shadowSamplesElem.value));
     gl.uniform1f(gl.getUniformLocation(program, 'shadowDim'), shadowDim)
     gl.uniform1i(gl.getUniformLocation(program, 'shadowSamples'), Math.pow(shadowDim, 2)) // number of samples is forced to power of 2
     
-    lightRot += deltaTime * 0.5
-    vec3.rotateY(lightPos, [-3,2,0], [0,0,0], lightRot)
-    lights[1].x = lightPos[0];
-    lights[1].y = lightPos[1];
-    lights[1].z = lightPos[2];
+    // Add lights
+    const renderLights = WorldState.lights.filter(light => light.enabled)
+    const numLights = renderLights.length;
+    gl.uniform1i(gl.getUniformLocation(program, 'numLights'), numLights)
 
     for (let i = 0; i < numLights; i++) {
-        const lightBrightnessElem = document.getElementById(`lightbrightness${i}`);
-        const lightRed = document.getElementById(`lightred${i}`)
-        const lightGreen = document.getElementById(`lightgreen${i}`)
-        const lightBlue = document.getElementById(`lightblue${i}`)
-        const lightSizeXElem = document.getElementById(`lightsizex${i}`)
-        const lightSizeYElem = document.getElementById(`lightsizey${i}`)
-        lights[i] = {...lights[i], 
-            sizeX: areaLightsElem.checked ? lightSizeXElem.value : 0, 
-            sizeY: areaLightsElem.checked ? lightSizeYElem.value : 0, 
-            r: lightRed.value * lightBrightnessElem.value, 
-            g: lightGreen.value * lightBrightnessElem.value, 
-            b: lightBlue.value * lightBrightnessElem.value}
-
+        const light = renderLights[i];
+        if (light.rotate) {
+            const lightRot = deltaTime * 0.5
+            vec3.rotateY(lightPos, [light.x, light.y, light.z], [0,0,0], lightRot)
+            light.x = lightPos[0];
+            light.y = lightPos[1];
+            light.z = lightPos[2];
+        }
         posLoc = gl.getUniformLocation(program, 'lightPos[' + i + ']')
         sizeLoc = gl.getUniformLocation(program, 'lightSize[' + i + ']')
         colLoc = gl.getUniformLocation(program, 'lightIntensity[' + i + ']')
-        gl.uniform3f(posLoc, lights[i].x, lights[i].y, lights[i].z)
-        gl.uniform2f(sizeLoc, lights[i].sizeX, lights[i].sizeY)
-        gl.uniform3f(colLoc, lights[i].r, lights[i].g, lights[i].b)
+        gl.uniform3f(posLoc, light.x, light.y, light.z)
+        gl.uniform2f(sizeLoc, enableAreaLights ? light.sizeX : 0, enableAreaLights ? light.sizeY : 0)
+        gl.uniform3f(colLoc, light.r * light.brightness, light.g * light.brightness, light.b * light.brightness)
     }
 
-    if (xmove > 3.0)
+    // Add spheres
+    if (xmove > 3.0) {
+        xmove = 3.0
         moveinv = -1.0
-    else if (xmove < -3.0)
+    }
+    else if (xmove < -3.0) {
+        xmove = -3.0
         moveinv = 1.0
+    }
     xmove += moveinv * deltaTime
     spheres[0].x = xmove
 
@@ -218,13 +181,20 @@ function drawScene(now) {
         gl.uniform3f(refColLoc, spheres[i].rr, spheres[i].rg, spheres[i].rb)
     }
 
+    // Add planes
+    let renderPlanes = []
+    for (let i = 0; i < WorldState.planes.length; i++) {
+        if (WorldState.planes[i].enabled) renderPlanes.push(WorldState.planes[i])
+    }
+    const numPlanes = renderPlanes.length;
+    gl.uniform1i(gl.getUniformLocation(program, 'numPlanes'), numPlanes)
     for (let i = 0; i < numPlanes; i++) {
         offsetLoc = gl.getUniformLocation(program, 'planeOffsets[' + i + ']')
         normalLoc = gl.getUniformLocation(program, 'planeNormals[' + i + ']')
         colLoc = gl.getUniformLocation(program, 'planeColors[' + i + ']')
-        gl.uniform1f(offsetLoc, planes[i].offset)
-        gl.uniform3f(normalLoc, planes[i].x, planes[i].y, planes[i].z)
-        gl.uniform3f(colLoc, planes[i].r, planes[i].g, planes[i].b)
+        gl.uniform1f(offsetLoc, renderPlanes[i].offset)
+        gl.uniform3f(normalLoc, renderPlanes[i].x, renderPlanes[i].y, renderPlanes[i].z)
+        gl.uniform3f(colLoc, renderPlanes[i].r, renderPlanes[i].g, renderPlanes[i].b)
     }
 
     // ----- Draw -----
@@ -265,6 +235,8 @@ function mouseDown(event) {
     if (event.target.closest('.controls')) return;
     mousePressed = true;
 }
+
+document.getElementById('arealightsenable').addEventListener('change', e => enableAreaLights = !enableAreaLights);
 
 document.addEventListener('mouseup', e => mousePressed = false)
 document.addEventListener('mousedown', mouseDown)

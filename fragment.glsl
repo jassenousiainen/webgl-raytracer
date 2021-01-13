@@ -57,23 +57,22 @@ float random( vec2 p ) {
 }
 
 bool intersectSphere(vec3 ray_origin, vec3 ray_direction, vec3 center, float radius, float tmin, inout float t_hit) {
-    vec3 tmp = center - ray_origin;
-    vec3 dir = ray_direction;
+    float radius_sqr = radius*radius;
+    vec3 vec_to_orig = center - ray_origin; 
 
-    float A = dot(dir, dir);
-    float B = - 2.0 * dot(dir, tmp);
-    float C = dot(tmp, tmp) - pow(radius, 2.0);
-    float radical = B*B - 4.0*A*C;
-    if (radical < 0.0)
-        return false;
+    float t_closest = dot(vec_to_orig , ray_direction); // t at the closest to the sphere's center
+    if (t_closest < 0.0) // If negative, the ray and sphere are on other sides
+        return false; 
 
-    radical = sqrt(radical);
-    float t_m = ( -B - radical ) / ( 2.0 * A );
-    float t_p = ( -B + radical ) / ( 2.0 * A );
-    vec3 pt_m = ray_origin + ray_direction * t_m;
-    vec3 pt_p = ray_origin + ray_direction * t_p;
+    float dist_to_center2 = dot(vec_to_orig, vec_to_orig) - t_closest * t_closest;
+    if (dist_to_center2 > radius_sqr) // If the smallest distance^2 from the ray to center is larger that radius^2, the ray doesn't intersect
+        return false; 
 
-    float t = (t_m < tmin) ? t_p : t_m;
+    float dist_mid_to_surface = sqrt(radius_sqr - dist_to_center2); 
+    float t_surface1 = t_closest - dist_mid_to_surface; // t values at surfaces on both sides
+    float t_surface2 = t_closest + dist_mid_to_surface;
+
+    float t = (t_surface1 < tmin) ? t_surface2 : t_surface1;
     if (t < t_hit && t > tmin) {
         t_hit = t;
         return true;

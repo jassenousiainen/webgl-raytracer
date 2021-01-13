@@ -17,11 +17,12 @@ function createShader(gl, type, source) {
     console.log(gl.getShaderInfoLog(shader));
     gl.deleteShader(shader);
 }
-
+console.log("COMPILING SHADERS")
 var vertexShaderSource = document.querySelector("#vertex-shader").text;
 var fragmentShaderSource = document.querySelector("#fragment-shader").text;
 var vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
 var fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
+console.log("CREATING PROGRAM")
 
 function createProgram(gl, vertexShader, fragmentShader) {
     var program = gl.createProgram();
@@ -36,7 +37,7 @@ function createProgram(gl, vertexShader, fragmentShader) {
     gl.deleteProgram(program);
 }
 var program = createProgram(gl, vertexShader, fragmentShader);
-
+console.log("FINISH")
 
 // Variables to hold the state of the world
 

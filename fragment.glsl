@@ -58,35 +58,35 @@ float random( vec2 p ) {
 
 bool intersectSphere(vec3 ray_origin, vec3 ray_direction, vec3 center, float radius, float tmin, inout float t_hit) {
     vec3 tmp = center - ray_origin;
-	vec3 dir = ray_direction;
+    vec3 dir = ray_direction;
 
-	float A = dot(dir, dir);
-	float B = - 2.0 * dot(dir, tmp);
-	float C = dot(tmp, tmp) - pow(radius, 2.0);
-	float radical = B*B - 4.0*A*C;
-	if (radical < 0.0)
-		return false;
+    float A = dot(dir, dir);
+    float B = - 2.0 * dot(dir, tmp);
+    float C = dot(tmp, tmp) - pow(radius, 2.0);
+    float radical = B*B - 4.0*A*C;
+    if (radical < 0.0)
+        return false;
 
-	radical = sqrt(radical);
-	float t_m = ( -B - radical ) / ( 2.0 * A );
-	float t_p = ( -B + radical ) / ( 2.0 * A );
-	vec3 pt_m = ray_origin + ray_direction * t_m;
-	vec3 pt_p = ray_origin + ray_direction * t_p;
+    radical = sqrt(radical);
+    float t_m = ( -B - radical ) / ( 2.0 * A );
+    float t_p = ( -B + radical ) / ( 2.0 * A );
+    vec3 pt_m = ray_origin + ray_direction * t_m;
+    vec3 pt_p = ray_origin + ray_direction * t_p;
 
-	float t = (t_m < tmin) ? t_p : t_m;
-	if (t < t_hit && t > tmin) {
-		t_hit = t;
-		return true;
-	}
-	return false;
+    float t = (t_m < tmin) ? t_p : t_m;
+    if (t < t_hit && t > tmin) {
+        t_hit = t;
+        return true;
+    }
+    return false;
 }
 
 bool intersectPlane(vec3 ray_origin, vec3 ray_direction, float offset, vec3 normal, vec3 center, vec2 size, float tmin, inout float t_hit) {
     vec3 normal_offset = normal * offset;
     float d = normal_offset.x + normal_offset.y + normal_offset.z;
-	float t = (d - dot(normal, ray_origin)) / dot(normal, ray_direction);
-	
-	if (t < t_hit && t > tmin) {
+    float t = (d - dot(normal, ray_origin)) / dot(normal, ray_direction);
+    
+    if (t < t_hit && t > tmin) {
         vec3 tmpPos = ray_origin + ray_direction * t;
         if (length(size) == 0.0 || (
             tmpPos.x < center.x + size.x*0.5 &&
@@ -96,8 +96,8 @@ bool intersectPlane(vec3 ray_origin, vec3 ray_direction, float offset, vec3 norm
             t_hit = t;
             return true;
         }
-	}
-	return false;
+    }
+    return false;
 }
 
 // Intersects with all of the objects in the world and returns closest hit (note the use of "out" arguments)
@@ -120,7 +120,7 @@ bool intersect(vec3 ray_origin,
         if (i >= numSpheres) break;
         if (intersectSphere(ray_origin, ray_direction, sphereCenters[i], 0.8, tmin, t_hit)) {
             idx = i;
-			intersected = 1;
+            intersected = 1;
         }
     }
 
@@ -130,11 +130,11 @@ bool intersect(vec3 ray_origin,
         vec3 planeNormal = planeNormals[i];
         bool tmp = false;
         if (enablePlaneBacksides || dot(ray_direction, planeNormal) < 0.0)
-	        tmp = intersectPlane(ray_origin, ray_direction, planeOffsets[i], planeNormal, vec3(0,0,0), vec2(0,0), tmin, t_hit);
+            tmp = intersectPlane(ray_origin, ray_direction, planeOffsets[i], planeNormal, vec3(0,0,0), vec2(0,0), tmin, t_hit);
         if (tmp) {
-		    normal = planeNormal;
+            normal = planeNormal;
             idx = i;
-			intersected = 2;
+            intersected = 2;
         }
     }
 
@@ -161,9 +161,9 @@ bool intersect(vec3 ray_origin,
         diffuseColor = sphereColors[idx];
         specularColor = vec3(1.0, 1.0, 1.0);
         reflectiveColor = reflectiveColors[idx];
-		normal = normalize(position - sphereCenters[idx]);
+        normal = normalize(position - sphereCenters[idx]);
         if (dot(normal, -ray_direction) < 0.0) // Backside shading: flip normal if ray and normal are on different sides
-		    normal *= -1.0;
+            normal *= -1.0;
     }
     else if (intersected == 2) {
         if (enablePlaneMirrors) {
@@ -176,7 +176,7 @@ bool intersect(vec3 ray_origin,
             reflectiveColor = vec3(0, 0, 0);
         }
         if (dot(normal, -ray_direction) < 0.0) // Backside shading: flip normal if ray and normal are on different sides
-		    normal *= -1.0;
+            normal *= -1.0;
     }
     else if (intersected == 3) {
         diffuseColor = lightIntensity[idx];
@@ -191,12 +191,12 @@ bool intersect(vec3 ray_origin,
 bool intersectShadowRay(vec3 ray_origin, vec3 ray_direction, inout float t_hit, float tmin) {
     for (int i = 0; i < MAX_SPHERES; i++) {
         if (i >= numSpheres) break;
-	    if (intersectSphere(ray_origin, ray_direction, sphereCenters[i], 0.8, tmin, t_hit))
+        if (intersectSphere(ray_origin, ray_direction, sphereCenters[i], 0.8, tmin, t_hit))
             return true;
     }
     for (int i = 0; i < MAX_PLANES; i++) {
         if (i >= numPlanes) break;
-	    if (intersectPlane(ray_origin, ray_direction, planeOffsets[i], planeNormals[i], vec3(0,0,0), vec2(0,0), tmin, t_hit))
+        if (intersectPlane(ray_origin, ray_direction, planeOffsets[i], planeNormals[i], vec3(0,0,0), vec2(0,0), tmin, t_hit))
             return true;
     }
     return false;
@@ -225,15 +225,17 @@ void getIncidentIntensity(vec3 p, vec3 position, vec3 intensity, vec2 size, floa
 }
 
 vec3 shadePhong(vec3 ray_direction, vec3 normal, vec3 dir_to_light, vec3 incident_intensity, vec3 diffuse_color, vec3 specular_color) {        
-	if (dot(normal, dir_to_light) > 0.0) {                                                  // Only add light if light is on the same side as normal
-        vec3 light_incident = incident_intensity * max(0.0, dot(normal, dir_to_light));     // Brightness depends on the angle between light and normal		
-		vec3 vect_reflection = -dir_to_light - 2.0 * dot(-dir_to_light, normal) * normal;	// Reflection vector pointing away from object
-		vec3 vect_camera = -ray_direction;													// Vector pointing from object to camera
-		float reflection_intensity = pow(max(0.0, dot(vect_reflection, vect_camera)), specular_exponent);// How closely the reflection vector points to the camera = intensity
-		vec3 specular = specular_color * reflection_intensity;
+    if (dot(normal, dir_to_light) > 0.0) {                                                  // Only add light if light is on the same side as normal
+        float light_incident = max(0.0, dot(normal, dir_to_light));                         // Brightness depends on the angle between light and normal
+        vec3 diffuse = diffuse_color*light_incident;
+        
+        vec3 vect_reflection = -dir_to_light - 2.0 * dot(-dir_to_light, normal) * normal;	// Reflection vector pointing away from object
+        vec3 vect_camera = -ray_direction;													// Vector pointing from object to camera
+        float reflection_intensity = pow(max(0.0, dot(vect_reflection, vect_camera)), specular_exponent);// How closely the reflection vector points to the camera = intensity
+        vec3 specular = specular_color * reflection_intensity;
 
-        return light_incident * (diffuse_color + specular);
-	}
+        return incident_intensity * (diffuse + specular);
+    }
 
     return vec3(0, 0, 0);
 }
@@ -311,7 +313,7 @@ vec3 reflectionIllumination(vec3 origin, vec3 rayDir, vec3 normal, vec3 reflecti
     for (int i = 0; i < MAX_RAYBOUNCES; i++) {
         if (i >= rayBounces || length(reflectiveColor) == 0.0) break; // Stop if we reach max number of bounces or hit material that is not reflective
 
-		// Trace the mirror ray and add the result to pixel
+        // Trace the mirror ray and add the result to pixel
         mirrorDir = vec3(rayDir - 2.0 * dot(rayDir, normal) * normal); // Get the direction of the reflected ray
         float t_bounceHit = 50.0;
         bool isLight = false;
@@ -323,7 +325,7 @@ vec3 reflectionIllumination(vec3 origin, vec3 rayDir, vec3 normal, vec3 reflecti
         if (enableRefGI) // Add indirect illumination to reflection
             mirror_sample_color += indirectIllumination(bounceHitPoint, normal, bounceDiffuseColor);
 
-		reflectionSum += mirror_sample_color * reflectiveColor;
+        reflectionSum += mirror_sample_color * reflectiveColor;
         origin = bounceHitPoint;
         rayDir = mirrorDir;
         reflectiveColor = bounceReflectiveColor * reflectiveColor;  // Successive ray colors are affected by each reflective surface's color

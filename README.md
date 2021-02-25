@@ -16,9 +16,11 @@ The program uses no vertex buffers, instead it uses the indices of the three ver
 - Global illumination with customizable number of samples
 - Mirror reflections with customizable number of bounces (also GI in reflections)
 - Free-fly perspective camera, use WASD -keys to move and mouse while holding left mouse button to look around
+- ACES tonemapping
 
 Note that I have made this application just for the purpose of learning WebGL, so there might be multiple bugs and errors.
 
 ## Screenshots
 ![screen1](/screenshots/screenshot1.png?raw=true)
 ![screen2](/screenshots/screenshot2.png?raw=true)
+![screen3](/screenshots/screenshot3.png?raw=true)

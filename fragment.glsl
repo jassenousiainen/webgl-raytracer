@@ -4,24 +4,32 @@ precision mediump float;
 #define MAX_LIGHTS 2
 #define MAX_SPHERES 5
 #define MAX_PLANES 6
-#define MAX_SHADOW_SAMPLES 49
+#define MAX_SHADOW_SAMPLES 25
 #define MAX_RAYBOUNCES 5
 #define MAX_GISAMPLES 100
 
-#define quadratic_attenuation 0.1
-#define linear_attenuation 0.4
-#define constant_attenuation 0.0
 #define specular_exponent 32.0
 #define EPSILON 0.001
 #define PI 3.141593
 float randomSeed = 0.1;
 
+const mat3 ACESInputMat = mat3(
+    0.59719, 0.07600, 0.02840,
+    0.35458, 0.90834, 0.13383,
+    0.04823, 0.01566, 0.83777);
+const mat3 ACESOutputMat = mat3(
+    1.60475, -0.10208, -0.00327,
+    -0.53108,  1.10813, -0.07276,
+    -0.07367, -0.00605,  1.07602);
+
 uniform int numLights;
 uniform vec3 lightPos[MAX_LIGHTS];
 uniform vec2 lightSize[MAX_LIGHTS];
 uniform vec3 lightIntensity[MAX_LIGHTS];
+uniform vec2 lightSpot[MAX_LIGHTS];
 uniform int shadowSamples;
 uniform float shadowDim;
+uniform vec2 attenuation;
 
 uniform int numSpheres;
 uniform vec3 sphereCenters[MAX_SPHERES];
@@ -61,7 +69,7 @@ bool intersectSphere(vec3 ray_origin, vec3 ray_direction, vec3 center, float rad
     vec3 vec_to_orig = center - ray_origin; 
 
     float t_closest = dot(vec_to_orig , ray_direction); // t at the closest to the sphere's center
-    if (t_closest < 0.0) // If negative, the ray and sphere are on other sides
+    if (t_closest < 0.0) // If negative, the ray and sphere are on other sides of the origin
         return false; 
 
     float dist_to_center2 = dot(vec_to_orig, vec_to_orig) - t_closest * t_closest;
@@ -143,7 +151,7 @@ bool intersect(vec3 ray_origin,
         vec3 center = lightPos[i];
         vec2 size = lightSize[i];
         bool tmp = false;
-        if (length(size) > 0.0)
+        if (size.x > 0.0 && size.y > 0.0)
             tmp = intersectPlane(ray_origin, ray_direction, center.y, vec3(0,1,0), center, size, tmin, t_hit);
         else
             tmp = intersectSphere(ray_origin, ray_direction, center, 0.1, tmin, t_hit);
@@ -166,9 +174,9 @@ bool intersect(vec3 ray_origin,
     }
     else if (intersected == 2) {
         if (enablePlaneMirrors) {
-            diffuseColor = vec3(0.1, 0.1, 0.1);
+            diffuseColor = planeColors[idx]*0.01;
             specularColor = vec3(0, 0, 0);
-            reflectiveColor = vec3(1.0, 1.0, 1.0);
+            reflectiveColor = planeColors[idx];
         } else {
             diffuseColor = planeColors[idx];
             specularColor = vec3(0.5, 0.5, 0.5);
@@ -178,10 +186,9 @@ bool intersect(vec3 ray_origin,
             normal *= -1.0;
     }
     else if (intersected == 3) {
-        diffuseColor = lightIntensity[idx];
+        diffuseColor = lightIntensity[idx]/25.0;
         isLight = true;
     }
-
 
     return intersected != 0;
 }
@@ -201,8 +208,8 @@ bool intersectShadowRay(vec3 ray_origin, vec3 ray_direction, inout float t_hit, 
     return false;
 }
 
-void getIncidentIntensity(vec3 p, vec3 position, vec3 intensity, vec2 size, float sample_i, out float light_distance, out vec3 vec_to_light, out vec3 incident_intensity) {
-    if (length(size) > 0.0) {
+void getIncidentIntensity(float sample_i, vec3 p, vec3 position, vec3 intensity, vec2 size, vec2 spot, out float light_distance, out vec3 vec_to_light, out vec3 incident_intensity) {
+    if (size.x > 0.0 && size.y > 0.0) {
         // Get jittered position on the light plane
         float inv_dim = 1.0 / shadowDim;
         float cell_sizeX = size.x * inv_dim;
@@ -217,10 +224,18 @@ void getIncidentIntensity(vec3 p, vec3 position, vec3 intensity, vec2 size, floa
     }
     
     light_distance = length(vec_to_light);
-    float attenuation = 1.0 / (quadratic_attenuation*pow(light_distance, 2.0) + linear_attenuation*light_distance + constant_attenuation);
+    float attenuation = 1.0 / (attenuation.x*pow(light_distance, 2.0) + attenuation.y*light_distance);
     
     vec_to_light = normalize(vec_to_light);
-    incident_intensity = intensity * attenuation;
+    
+    // Spotlight effect
+    float spot_falloff = 1.0;
+    if (spot.x > 0.0) {
+        float dot_to_light = dot(vec_to_light, vec3(0.0, 1.0, 0.0));
+        spot_falloff = (dot_to_light > spot.x) ? pow(dot_to_light, spot.y) : 0.0;
+    }
+    
+    incident_intensity = intensity * attenuation * spot_falloff;
 }
 
 vec3 shadePhong(vec3 ray_direction, vec3 normal, vec3 dir_to_light, vec3 incident_intensity, vec3 diffuse_color, vec3 specular_color) {        
@@ -245,17 +260,18 @@ vec3 illumination(vec3 point, vec3 ray_dir, vec3 normal, vec3 diffuseColor, vec3
 
     for (int i = 0; i < MAX_LIGHTS; i++) {
         if (i >= numLights) break;
-        int areaShadowSamples = length(lightSize[i]) > 0.0 ? shadowSamples : 1; // If the size of the light is zero, it is point light and one sample is enough
         vec3 lightPos = lightPos[i];
         vec3 lightIntensity = lightIntensity[i];
         vec2 lightSize = lightSize[i];
+        vec2 lightSpot = lightSpot[i];
         vec3 light_sum;
+        int areaShadowSamples = (lightSize.x > 0.0 && lightSize.y > 0.0) ? shadowSamples : 1; // If the size of the light is zero, it is point light and one sample is enough
         
         for (int k = 0; k < MAX_SHADOW_SAMPLES; k++) {
             if (k >= areaShadowSamples) break;
             vec3 incident_intensity, dir_to_light;
             float light_distance;
-            getIncidentIntensity(point, lightPos, lightIntensity, lightSize, float(k), light_distance, dir_to_light, incident_intensity);
+            getIncidentIntensity(float(k), point, lightPos, lightIntensity, lightSize, lightSpot, light_distance, dir_to_light, incident_intensity);
             
             float t_shadowHit = light_distance;
             intersectShadowRay(point, dir_to_light, t_shadowHit, 0.01);
@@ -362,5 +378,16 @@ void main() {
     if (rayBounces > 0 && length(reflectiveColor) > 0.0)
         pixelColor += reflectionIllumination(point, ray_dir, normal, reflectiveColor);
 
-    fragColor = vec4(pixelColor, 1.0);
+    
+    // ACES tonemapping (source: https://github.com/TheRealMJP/BakingLab/blob/master/BakingLab/ACES.hlsl)
+    pixelColor = ACESInputMat * pixelColor;
+
+    vec3 a = pixelColor * (pixelColor + 0.0245786) - 0.000090537;
+    vec3 b = pixelColor * (0.983729 * pixelColor + 0.4329510) + 0.238081;
+    pixelColor = a / b;
+
+    pixelColor = ACESOutputMat * pixelColor;
+    pixelColor = clamp(pixelColor, 0.0, 1.0);
+                
+    fragColor = vec4(pow(pixelColor, vec3(0.45)), 1.0);
 }

@@ -3,55 +3,51 @@ const { mat4, mat3, vec3 } = glMatrix;
 // ========== INITIALIZATION ==========
 
 // --- Create WebGLRenderingContext ---
-var canvas = document.querySelector("#c");
-var gl = canvas.getContext("webgl2");
+const canvas = document.querySelector("#c");
+const gl = canvas.getContext("webgl2");
 
 function createShader(gl, type, source) {
-    var shader = gl.createShader(type);
+    const shader = gl.createShader(type);
     gl.shaderSource(shader, source);
     gl.compileShader(shader);
-    var success = gl.getShaderParameter(shader, gl.COMPILE_STATUS);
-    if (success) {
+    if (gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
       return shader;
     }
     console.log(gl.getShaderInfoLog(shader));
     gl.deleteShader(shader);
 }
+
 console.log("COMPILING SHADERS")
-var vertexShaderSource = document.querySelector("#vertex-shader").text;
-var fragmentShaderSource = document.querySelector("#fragment-shader").text;
-var vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
-var fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
+const vertexShaderSource = document.querySelector("#vertex-shader").text;       // Get the shader code from inline HTML
+const fragmentShaderSource = document.querySelector("#fragment-shader").text;
+const vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
+const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fragmentShaderSource);
 console.log("CREATING PROGRAM")
 
 function createProgram(gl, vertexShader, fragmentShader) {
-    var program = gl.createProgram();
-    gl.attachShader(program, vertexShader);
-    gl.attachShader(program, fragmentShader);
-    gl.linkProgram(program);
-    var success = gl.getProgramParameter(program, gl.LINK_STATUS);
-    if (success) {
-      return program;
+    const GLprogram = gl.createProgram();
+    gl.attachShader(GLprogram, vertexShader);
+    gl.attachShader(GLprogram, fragmentShader);
+    gl.linkProgram(GLprogram);
+    if (gl.getProgramParameter(GLprogram, gl.LINK_STATUS)) {
+      return GLprogram;
     }
-    console.log(gl.getProgramInfoLog(program));
-    gl.deleteProgram(program);
+    console.log(gl.getProgramInfoLog(GLprogram));
+    gl.deleteProgram(GLprogram);
 }
-var program = createProgram(gl, vertexShader, fragmentShader);
+const program = createProgram(gl, vertexShader, fragmentShader);
 console.log("FINISH")
 
 // Variables to hold the state of the world
-
-let spheres = WorldState.spheres;
-const numSpheres = spheres.length
-
+const numSpheres = WorldState.spheres.length
 let near = 0.1
 let far = 50
 let projectionMatrix = mat4.create()
 let yaw = 0
-let pitch = -0.1
+let pitch = -0.12
 let camX = 0
-let camY = 2.4
-let camZ = 15
+let camY = 2
+let camZ = 16
 let rotY = mat4.create()
 let rotX = mat4.create()
 let translationMatrix = mat4.create()
@@ -61,7 +57,6 @@ let keyDownW = false
 let keyDownA = false
 let keyDownS = false
 let keyDownD = false
-let reflectionBounces = 3;
 let enableAreaLights = true;
 let lightPos = vec3.create()
 let shadowDim = 3;
@@ -127,7 +122,8 @@ function drawScene(now) {
     gl.uniform1f(gl.getUniformLocation(program, 'near'), near)
     gl.uniform1f(gl.getUniformLocation(program, 'far'), far)
     gl.uniformMatrix4fv(gl.getUniformLocation(program, 'invprojview'), false, inverseProjectionViewMatrix)
-    gl.uniform3f(gl.getUniformLocation(program, 'ambientLight'), 0.02, 0.02, 0.02)
+    gl.uniform3f(gl.getUniformLocation(program, 'ambientLight'), 0.01, 0.01, 0.01)
+    gl.uniform2f(gl.getUniformLocation(program, 'attenuation'), WorldState.quadraticAttenuation, WorldState.linearAttenuation)
     gl.uniform1i(gl.getUniformLocation(program, 'numSpheres'), numSpheres)
     gl.uniform1i(gl.getUniformLocation(program, 'rayBounces'), reflectionBouncesElem.value)
     gl.uniform1i(gl.getUniformLocation(program, 'enableGI'), enableGIbutton.checked ? 1 : 0)
@@ -135,7 +131,7 @@ function drawScene(now) {
     gl.uniform1i(gl.getUniformLocation(program, 'indirectSamples'), indirectSamplesElem.value)
     gl.uniform1i(gl.getUniformLocation(program, 'enablePlaneBacksides'), planeBacksidesElem.checked)
     gl.uniform1i(gl.getUniformLocation(program, 'enablePlaneMirrors'), planeMirrorsElem.checked)
-    shadowDim = Math.floor(Math.sqrt(shadowSamplesElem.value));
+    shadowDim = Math.floor(Math.sqrt(shadowSamplesElem.value))
     gl.uniform1f(gl.getUniformLocation(program, 'shadowDim'), shadowDim)
     gl.uniform1i(gl.getUniformLocation(program, 'shadowSamples'), Math.pow(shadowDim, 2)) // number of samples is forced to power of 2
     
@@ -156,9 +152,11 @@ function drawScene(now) {
         posLoc = gl.getUniformLocation(program, 'lightPos[' + i + ']')
         sizeLoc = gl.getUniformLocation(program, 'lightSize[' + i + ']')
         colLoc = gl.getUniformLocation(program, 'lightIntensity[' + i + ']')
+        spotLoc = gl.getUniformLocation(program, 'lightSpot[' + i + ']')
         gl.uniform3f(posLoc, light.x, light.y, light.z)
         gl.uniform2f(sizeLoc, enableAreaLights ? light.sizeX : 0, enableAreaLights ? light.sizeY : 0)
         gl.uniform3f(colLoc, light.r * light.brightness, light.g * light.brightness, light.b * light.brightness)
+        gl.uniform2f(spotLoc, light.spotSize, light.spotIntensity)
     }
 
     // Add spheres
@@ -171,15 +169,16 @@ function drawScene(now) {
         moveinv = 1.0
     }
     xmove += moveinv * deltaTime
-    spheres[0].x = xmove
+    WorldState.spheres[0].x = xmove
 
     for (let i = 0; i < numSpheres; i++) {
+        const sphere = WorldState.spheres[i];
         posLoc = gl.getUniformLocation(program, 'sphereCenters[' + i + ']')
         colLoc = gl.getUniformLocation(program, 'sphereColors[' + i + ']')
         refColLoc = gl.getUniformLocation(program, 'reflectiveColors[' + i + ']')
-        gl.uniform3f(posLoc, spheres[i].x, spheres[i].y, spheres[i].z)
-        gl.uniform3f(colLoc, spheres[i].r, spheres[i].g, spheres[i].b)
-        gl.uniform3f(refColLoc, spheres[i].rr, spheres[i].rg, spheres[i].rb)
+        gl.uniform3f(posLoc, sphere.x, sphere.y, sphere.z)
+        gl.uniform3f(colLoc, sphere.r, sphere.g, sphere.b)
+        gl.uniform3f(refColLoc, sphere.rr, sphere.rg, sphere.rb)
     }
 
     // Add planes
@@ -199,17 +198,13 @@ function drawScene(now) {
     }
 
     // ----- Draw -----
-    var primitiveType = gl.TRIANGLES;
-    var offset = 0;
-    var count = 3;
-    gl.drawArrays(primitiveType, offset, count);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
     requestAnimationFrame(drawScene);
 }
 // start loop
 requestAnimationFrame(drawScene);
 
-// ===== EVENT HANDLING =====
-let mousePressed = false
+// ===== INPUT EVENT HANDLING =====
 function logMovement(event) {
     if (mousePressed) {
         yaw -= event.movementX*0.002
@@ -232,15 +227,11 @@ function handleKeys(event, down) {
             break;
     }
 }
-function mouseDown(event) {
-    if (event.target.closest('.controls')) return;
-    mousePressed = true;
-}
 
-document.getElementById('arealightsenable').addEventListener('change', e => enableAreaLights = !enableAreaLights);
-
+let mousePressed = false
 document.addEventListener('mouseup', e => mousePressed = false)
-document.addEventListener('mousedown', mouseDown)
+document.addEventListener('mousedown', e => mousePressed = !e.target.closest('.controls')) // register mousepresses only if it occured outside of control panel
 document.addEventListener('mousemove', logMovement)
 document.addEventListener('keydown', e => handleKeys(e, true))
 document.addEventListener('keyup', e => handleKeys(e, false))
+document.getElementById('arealightsenable').addEventListener('change', e => enableAreaLights = !enableAreaLights);

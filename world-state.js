@@ -1,7 +1,7 @@
 // Define here the objects and their default states in the world
 let WorldState = {
     lights: [
-        {x: 0, y: 3.999999, z: 0, r: 1, g: 1, b: 1, sizeX: 2, sizeY: 2, brightness: 50, spotSize: 0.001, spotIntensity: 1.5, rotate: false, enabled: true},
+        {x: 0, y: 3.999999, z: 0, r: 1, g: 1, b: 1, sizeX: 1, sizeY: 1, brightness: 50, spotSize: 0.001, spotIntensity: 1.5, rotate: false, enabled: true},
         {x: -3.3, y: 2.5, z: 0, r: 1, g: 1, b: 1, sizeX: 0.3, sizeY: 0.3, brightness: 100, spotSize: 0.9, spotIntensity: 0.0, rotate: true, enabled: false}
     ],
     spheres : [
@@ -18,9 +18,7 @@ let WorldState = {
         {x: 1.0, y: 0.0, z: 0, r: 0.1, g: 1.0, b: 0.1, offset: -4.0, enabled: true, desc: 'left wall'},
         {x: 0, y: 0, z: 1.0, r: 1.0, g: 1.0, b: 1.0, offset: -4.0, enabled: true, desc: 'back wall'},
         {x: 0, y: 0, z: -1.0, r: 1.0, g: 1.0, b: 1.0, offset: 4.0, enabled: false, desc: 'front wall'}
-    ],
-    quadraticAttenuation: 1.5,
-    linearAttenuation: 0.0
+    ]
 }
 
 // Add the inputs to html (note that the event handling is integrated into the elements' onInput -functions)
@@ -29,37 +27,37 @@ function addLightInputs(i, lightArr) {
     const htmlStr = `
         <br>
         <b>light ${i+1}</b><br>
-        <input type="checkbox" onInput="WorldState.lights[${i}].enabled = this.checked" ${lightArr[i].enabled && "checked"}> on/off<br>
+        <input type="checkbox" ${lightArr[i].enabled && "checked"} id="${i}" class="light-enable"> on/off<br>
         <table class="sliders">
             <tr>
                 <td><label>Bright:</label></td>
-                <td><input type="range" min="0" max="100" value="${lightArr[i].brightness}" step="0.1" onInput="WorldState.lights[${i}].brightness = this.value"></td>
+                <td><input type="range" min="0" max="100" step="0.1" value="${lightArr[i].brightness}" id="${i}" class="light-brightness"></td>
             </tr>
             <tr>
                 <td><label>Spot size:</label></td>
-                <td><input type="range" min="0" max="1" value="${1-lightArr[i].spotSize}" step="0.01" onInput="WorldState.lights[${i}].spotSize = 1-this.value"></td>
+                <td><input type="range" min="0" max="1" step="0.01" value="${1-lightArr[i].spotSize}" id="${i}" class="light-spotsize"></td>
             </tr>
             <tr>
                 <td><label>Spot falloff:</label></td>
-                <td><input type="range" min="0" max="4" value="${lightArr[i].spotIntensity}" step="0.01" onInput="WorldState.lights[${i}].spotIntensity = this.value"></td>
+                <td><input type="range" min="0" max="4" step="0.01" value="${lightArr[i].spotIntensity}" id="${i}" class="light-spotintensity"></td>
             </tr>
             <tr>
                 <td><label>r:</label></td>
-                <td><input type="range" min="0" max="1" value="1" step="0.1" onInput="WorldState.lights[${i}].r = this.value"></td>
+                <td><input type="range" min="0" max="1" value="1" step="0.1" id="${i}r" class="light-color"></td>
             </tr>
             <tr>
                 <td><label>g:</label></td>
-                <td><input type="range" min="0" max="1" value="1" step="0.1" onInput="WorldState.lights[${i}].g = this.value"></td>
+                <td><input type="range" min="0" max="1" value="1" step="0.1" id="${i}g" class="light-color"></td>
             </tr>
             <tr>
                 <td><label>b:</label></td>
-                <td><input type="range" min="0" max="1" value="1" step="0.1" onInput="WorldState.lights[${i}].b = this.value"></td>
+                <td><input type="range" min="0" max="1" value="1" step="0.1" id="${i}b" class="light-color"></td>
             </tr>
                 <td><label>sizeX:</label></td>
-                <td><input type="range" min="0" max="3" value="${lightArr[i].sizeX}" step="0.01" onInput="WorldState.lights[${i}].sizeX = this.value"></td>
+                <td><input type="range" min="0" max="3" step="0.01" value="${lightArr[i].sizeX}" id="${i}x" class="light-size"></td>
             <tr>
                 <td><label>sizeY:</label></td>
-                <td><input type="range" min="0" max="3" value="${lightArr[i].sizeY}" step="0.01" onInput="WorldState.lights[${i}].sizeY = this.value"></td>
+                <td><input type="range" min="0" max="3" step="0.01" value="${lightArr[i].sizeY}" id="${i}y" class="light-size"></td>
             </tr>
         </table>`;
     container.insertAdjacentHTML('beforeend', htmlStr);
@@ -68,16 +66,9 @@ function addLightInputs(i, lightArr) {
 function addPlaneInputs(i, planeArr) {
     const container = document.getElementById("planecontrols");
     const htmlStr = `
-        <input type="checkbox" onInput="WorldState.planes[${i}].enabled = this.checked" ${planeArr[i].enabled && "checked"}><b>${planeArr[i].desc}</b><br>`;
+        <input type="checkbox" id="${i}" class="plane-enable" ${planeArr[i].enabled && "checked"}><b>${planeArr[i].desc}</b><br>`;
     container.insertAdjacentHTML('beforeend', htmlStr);
 }
-
-const attenuationInputs = `
-    Attenuation:<br>
-    <input type="range" min="0" max="10" step="0.01" value="${WorldState.quadraticAttenuation}" onInput="WorldState.quadraticAttenuation = this.value"> Quadratic
-    <input type="range" min="0" max="10" step="0.01" value="${WorldState.linearAttenuation}" onInput="WorldState.linearAttenuation = this.value"> Linear
-    <br>`
-document.getElementById("lightcontrols").insertAdjacentHTML('beforeend', attenuationInputs)
 
 for (let i = 0; i < WorldState.lights.length; i++) {
     addLightInputs(i, WorldState.lights);

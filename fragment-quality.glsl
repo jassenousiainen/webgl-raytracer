@@ -4,14 +4,13 @@ precision mediump float;
 #define MAX_LIGHTS 2
 #define MAX_SPHERES 5
 #define MAX_PLANES 6
-#define MAX_SHADOW_SAMPLES 25
+#define MAX_SHADOW_SAMPLES 49
 #define MAX_RAYBOUNCES 5
 #define MAX_GISAMPLES 100
 
 #define specular_exponent 32.0
 #define EPSILON 0.001
 #define PI 3.141593
-float randomSeed = 0.1;
 
 const mat3 ACESInputMat = mat3(
     0.59719, 0.07600, 0.02840,
@@ -22,6 +21,8 @@ const mat3 ACESOutputMat = mat3(
     -0.53108,  1.10813, -0.07276,
     -0.07367, -0.00605,  1.07602);
 
+float randomIncrement;
+uniform float randomseed;
 uniform int numLights;
 uniform vec3 lightPos[MAX_LIGHTS];
 uniform vec2 lightSize[MAX_LIGHTS];
@@ -60,8 +61,8 @@ float random( vec2 p ) {
         23.14069263277926, // e^pi (Gelfond's constant)
          2.665144142690225 // 2^sqrt(2) (Gelfondâ€“Schneider constant)
     );
-    randomSeed += 0.02; // increment, so that each access gets different value
-    return fract( cos( dot(p+randomSeed,K1) ) * 12345.6789 );
+    randomIncrement += 0.02; // increment, so that each access gets different value
+    return fract( cos( dot(p+randomIncrement,K1) ) * 12345.6789 );
 }
 
 bool intersectSphere(vec3 ray_origin, vec3 ray_direction, vec3 center, float radius, float tmin, inout float t_hit) {
@@ -163,7 +164,7 @@ bool intersect(vec3 ray_origin,
 
     position = ray_origin + ray_direction * t_hit;
 
-    // Optimization: make only one color lookup for each intersection
+    // Make only one color lookup for each intersection
     if (intersected == 1) {
         diffuseColor = sphereColors[idx];
         specularColor = vec3(1.0, 1.0, 1.0);
@@ -196,12 +197,12 @@ bool intersect(vec3 ray_origin,
 // Faster intersect function for shadows
 bool intersectShadowRay(vec3 ray_origin, vec3 ray_direction, inout float t_hit, float tmin) {
     for (int i = 0; i < MAX_SPHERES; i++) {
-        if (i >= numSpheres) break;
+        if (i == numSpheres) break;
         if (intersectSphere(ray_origin, ray_direction, sphereCenters[i], 0.8, tmin, t_hit))
             return true;
     }
     for (int i = 0; i < MAX_PLANES; i++) {
-        if (i >= numPlanes) break;
+        if (i == numPlanes) break;
         if (intersectPlane(ray_origin, ray_direction, planeOffsets[i], planeNormals[i], vec3(0,0,0), vec2(0,0), tmin, t_hit))
             return true;
     }
@@ -222,19 +223,19 @@ void getIncidentIntensity(float sample_i, vec3 p, vec3 position, vec3 intensity,
     } else {
         vec_to_light = position - p; // point light
     }
-    
+
     light_distance = length(vec_to_light);
     float attenuation = 1.0 / (attenuation.x*pow(light_distance, 2.0) + attenuation.y*light_distance);
-    
     vec_to_light = normalize(vec_to_light);
-    
+
     // Spotlight effect
+    // spot.x is the size of the spot and spot.y is the exponent to produce smooth falloff
     float spot_falloff = 1.0;
     if (spot.x > 0.0) {
         float dot_to_light = dot(vec_to_light, vec3(0.0, 1.0, 0.0));
         spot_falloff = (dot_to_light > spot.x) ? pow(dot_to_light, spot.y) : 0.0;
     }
-    
+
     incident_intensity = intensity * attenuation * spot_falloff;
 }
 
@@ -259,25 +260,26 @@ vec3 illumination(vec3 point, vec3 ray_dir, vec3 normal, vec3 diffuseColor, vec3
     vec3 illuminationColor;
 
     for (int i = 0; i < MAX_LIGHTS; i++) {
-        if (i >= numLights) break;
+        if (i == numLights) break;
         vec3 lightPos = lightPos[i];
         vec3 lightIntensity = lightIntensity[i];
         vec2 lightSize = lightSize[i];
         vec2 lightSpot = lightSpot[i];
         vec3 light_sum;
-        int areaShadowSamples = (lightSize.x > 0.0 && lightSize.y > 0.0) ? shadowSamples : 1; // If the size of the light is zero, it is point light and one sample is enough
-        
+        int areaShadowSamples = (lightSize.x > 0.0 && lightSize.y > 0.0) ? shadowSamples : 1;
+
         for (int k = 0; k < MAX_SHADOW_SAMPLES; k++) {
-            if (k >= areaShadowSamples) break;
+            if (k == areaShadowSamples) break;
             vec3 incident_intensity, dir_to_light;
             float light_distance;
             getIncidentIntensity(float(k), point, lightPos, lightIntensity, lightSize, lightSpot, light_distance, dir_to_light, incident_intensity);
             
-            float t_shadowHit = light_distance;
-            intersectShadowRay(point, dir_to_light, t_shadowHit, 0.01);
-
-            if (abs(t_shadowHit - light_distance) < EPSILON) {
-                light_sum += shadePhong(ray_dir, normal, dir_to_light, incident_intensity, diffuseColor, specularColor);
+            if (length(incident_intensity) > 0.01) { // If there is no light at this point (distance or outside of spotlight) do not check for shadows
+                float t_shadowHit = light_distance;
+                intersectShadowRay(point, dir_to_light, t_shadowHit, 0.01);
+                if (abs(t_shadowHit - light_distance) < EPSILON) {
+                    light_sum += shadePhong(ray_dir, normal, dir_to_light, incident_intensity, diffuseColor, specularColor);
+                }
             }
         }
 
@@ -289,7 +291,7 @@ vec3 illumination(vec3 point, vec3 ray_dir, vec3 normal, vec3 diffuseColor, vec3
 // Calculates and returns indirect illumination on a given point
 // uses only one bounce because of exponential performance hit
 vec3 indirectIllumination(vec3 point, vec3 normal, vec3 diffuseColor) {
-    if (length(diffuseColor) == 0.0) return vec3(0,0,0); // don't do useless calculations if the surface doesn't have a diffuse color
+    if (length(diffuseColor) == 0.0) return vec3(0,0,0); // don't do unneeded calculations if the surface doesn't have a diffuse color
 
     mat3 transform;
     if (abs(normal.x) > abs(normal.y))
@@ -339,6 +341,8 @@ vec3 reflectionIllumination(vec3 origin, vec3 rayDir, vec3 normal, vec3 reflecti
         
         if (enableRefGI) // Add indirect illumination to reflection
             mirror_sample_color += indirectIllumination(bounceHitPoint, normal, bounceDiffuseColor);
+        else
+            mirror_sample_color += ambientLight * bounceDiffuseColor;
 
         reflectionSum += mirror_sample_color * reflectiveColor;
         origin = bounceHitPoint;
@@ -354,11 +358,12 @@ void main() {
     float t_hit = length(ray); // The far clipping distance
     vec3 pixelColor, diffuseColor, specularColor, reflectiveColor, normal, point;
     bool isLight = false;
+    randomIncrement = randomseed;
 
     // intersect the ray with objects (tmin is 0, because vertex shader places the origin in near clipping distance)
     intersect(origin, ray_dir, t_hit, 0.0, point, normal, diffuseColor, specularColor, reflectiveColor, isLight);
 
-    if (isLight) {  // If the ray hit a light, return its color because they dont have any other properties than surface color
+    if (isLight) {  // If the ray hit a light, return its color because it doesn't have any other properties than surface color
         fragColor = vec4(diffuseColor, 1.0);
         return;
     }

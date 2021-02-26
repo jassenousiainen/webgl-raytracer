@@ -1,5 +1,5 @@
 # WebGL Raytracer
-A simple realtime raytracer made with JavaScript and WebGL. Requires browser with WebGL 2.0 support (developed and tested on Chrome v87) and a somewhat powerful GPU.
+A simple realtime raytracer made with JavaScript and WebGL. Requires browser with WebGL 2.0 support (Edge Chromium gives best peformance) and a somewhat powerful GPU.
 
 View demo in here: https://jassenousiainen.github.io/
 

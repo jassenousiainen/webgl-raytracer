@@ -119,9 +119,11 @@ function updatePlanes() {
         const offsetLoc = gl.getUniformLocation(program, 'planeOffsets[' + i + ']')
         const normalLoc = gl.getUniformLocation(program, 'planeNormals[' + i + ']')
         const colLoc = gl.getUniformLocation(program, 'planeColors[' + i + ']')
+        const planeRoughnessLoc = gl.getUniformLocation(program, 'planeRoughness[' + i + ']')
         gl.uniform1f(offsetLoc, renderPlanes[i].offset)
         gl.uniform3f(normalLoc, renderPlanes[i].x, renderPlanes[i].y, renderPlanes[i].z)
         gl.uniform3f(colLoc, renderPlanes[i].r, renderPlanes[i].g, renderPlanes[i].b)
+        gl.uniform1f(planeRoughnessLoc, renderPlanes[i].roughness)
     }
 }
 
@@ -134,9 +136,13 @@ function updateSpheres() {
         posLoc = gl.getUniformLocation(program, 'sphereCenters[' + i + ']')
         colLoc = gl.getUniformLocation(program, 'sphereColors[' + i + ']')
         refColLoc = gl.getUniformLocation(program, 'reflectiveColors[' + i + ']')
+        specColLoc = gl.getUniformLocation(program, 'sphereSpecColors[' + i + ']')
+        const sphereRoughnessLoc = gl.getUniformLocation(program, 'sphereRoughness[' + i + ']')
         gl.uniform3f(posLoc, sphere.x, sphere.y, sphere.z)
         gl.uniform3f(colLoc, sphere.r, sphere.g, sphere.b)
         gl.uniform3f(refColLoc, sphere.rr, sphere.rg, sphere.rb)
+        gl.uniform3f(specColLoc, sphere.sr, sphere.sg, sphere.sb)
+        gl.uniform1f(sphereRoughnessLoc, sphere.roughness)
     }
 }
 

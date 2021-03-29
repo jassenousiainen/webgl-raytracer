@@ -4,13 +4,14 @@ precision mediump float;
 #define MAX_LIGHTS 2
 #define MAX_SPHERES 5
 #define MAX_PLANES 6
-#define MAX_SHADOW_SAMPLES 49
+#define MAX_SHADOW_SAMPLES 25
 #define MAX_RAYBOUNCES 5
 #define MAX_GISAMPLES 100
 
 #define specular_exponent 32.0
 #define EPSILON 0.001
 #define PI 3.141593
+#define PI2 6.283185
 
 const mat3 ACESInputMat = mat3(
     0.59719, 0.07600, 0.02840,
@@ -36,11 +37,14 @@ uniform int numSpheres;
 uniform vec3 sphereCenters[MAX_SPHERES];
 uniform vec3 sphereColors[MAX_SPHERES];
 uniform vec3 reflectiveColors[MAX_SPHERES];
+uniform vec3 sphereSpecColors[MAX_SPHERES];
+uniform float sphereRoughness[MAX_SPHERES];
 
 uniform int numPlanes;
 uniform float planeOffsets[MAX_PLANES];
 uniform vec3 planeNormals[MAX_PLANES];
 uniform vec3 planeColors[MAX_PLANES];
+uniform float planeRoughness[MAX_PLANES];
 
 uniform int rayBounces;
 uniform vec3 ambientLight;
@@ -118,6 +122,7 @@ bool intersect(vec3 ray_origin,
             inout vec3 diffuseColor,
             inout vec3 specularColor,
             inout vec3 reflectiveColor,
+            inout float roughness,
             inout bool isLight)
 {
     int intersected = 0;
@@ -165,10 +170,11 @@ bool intersect(vec3 ray_origin,
     position = ray_origin + ray_direction * t_hit;
 
     // Make only one color lookup for each intersection
-    if (intersected == 1) {
+     if (intersected == 1) {
         diffuseColor = sphereColors[idx];
-        specularColor = vec3(1.0, 1.0, 1.0);
+        specularColor = sphereSpecColors[idx];
         reflectiveColor = reflectiveColors[idx];
+        roughness = sphereRoughness[idx];
         normal = normalize(position - sphereCenters[idx]);
         if (dot(normal, -ray_direction) < 0.0) // Backside shading: flip normal if ray and normal are on different sides
             normal *= -1.0;
@@ -178,10 +184,12 @@ bool intersect(vec3 ray_origin,
             diffuseColor = planeColors[idx]*0.01;
             specularColor = vec3(0, 0, 0);
             reflectiveColor = planeColors[idx];
+            roughness = 1.0;
         } else {
             diffuseColor = planeColors[idx];
-            specularColor = vec3(0.5, 0.5, 0.5);
+            specularColor = vec3(0, 0, 0);
             reflectiveColor = vec3(0, 0, 0);
+            roughness = planeRoughness[idx];
         }
         if (dot(normal, -ray_direction) < 0.0) // Backside shading: flip normal if ray and normal are on different sides
             normal *= -1.0;
@@ -288,68 +296,93 @@ vec3 illumination(vec3 point, vec3 ray_dir, vec3 normal, vec3 diffuseColor, vec3
     return illuminationColor;
 }
 
+vec3 randomHemisphereDir(vec2 rand) {
+    float z = random(rand) * 2.0 - 1.0;
+    float a = random(rand) * PI2;       // uniform angle on [0, 2*pi]
+    float r = sqrt(1.0 - z * z);        // uniform radius on hemisphere
+    return vec3(r*cos(a), r*sin(a), z); // get cartesian coordinates
+}
+
 // Calculates and returns indirect illumination on a given point
 // uses only one bounce because of exponential performance hit
-vec3 indirectIllumination(vec3 point, vec3 normal, vec3 diffuseColor) {
+vec3 indirectIllumination(vec3 point, vec3 rayDir, vec3 normal, vec3 diffuseColor, float roughness) {
     if (length(diffuseColor) == 0.0) return vec3(0,0,0); // don't do unneeded calculations if the surface doesn't have a diffuse color
-
-    mat3 transform;
-    if (abs(normal.x) > abs(normal.y))
-        transform[2] = vec3(normal.z, 0, -normal.x) / sqrt(normal.x * normal.x + normal.z * normal.z);
-    else
-        transform[2] = vec3(0, -normal.z, normal.y) / sqrt(normal.y * normal.y + normal.z * normal.z);
-    transform[0] = cross(normal, transform[2]);
-    transform[1] = normal;
 
     // Sample rays uniformly over hemisphere with spherical coordinates
     vec3 indirect_sampling_sum;
     for (int k = 0; k < MAX_GISAMPLES; k++) {
         if (k >= indirectSamples) break;
-        float z = random(point.xy);
-        float radius = sqrt(1.0 - z * z);						    // uniform radius on hemisphere
-        float theta = 2.0 * PI * random(point.yx);	                // uniform angle on [0, 2*pi]
-        vec3 coords = vec3(cos(theta)*radius, z, sin(theta)*radius);// get cartesian coordinates
 
-        // Transform point to world space
-        vec3 indirectDir = transform * coords;
+        vec3 diffuseDir = normalize(normal + randomHemisphereDir(point.xy));
+        vec3 mirrorDir = reflect(rayDir, normal);
+        vec3 indirectDir = normalize(mix(mirrorDir, diffuseDir, roughness));
+
         float t_indirectHit = 10.0;
-        vec3 indirectHitPoint, indirectDiffuseColor, indirectSpecularColor, indirectReflectiveColor, indirectNormal;
+        vec3 indirectHitPoint, indirectDiffuseColor, indirectSpecularColor, indirectRefColor, indirectNormal;
+        float indirectRoughness;
         bool isLight = false;
 
-        // Intersect this bounced ray (lights are considered black, because their illumination is already taken into account) and get direct illumination from this point
-        intersect(point, indirectDir, t_indirectHit, 0.01, indirectHitPoint, indirectNormal, indirectDiffuseColor, indirectSpecularColor, indirectReflectiveColor, isLight);
-        indirect_sampling_sum += isLight ? vec3(0,0,0) : z * illumination(indirectHitPoint, indirectDir, indirectNormal, indirectDiffuseColor, indirectSpecularColor);
+        // Intersect this bounced ray and get direct illumination from this point
+        intersect(point, indirectDir, t_indirectHit, 0.01, indirectHitPoint, indirectNormal, indirectDiffuseColor, indirectSpecularColor, indirectRefColor, indirectRoughness, isLight);
+        if (length(indirectRefColor) > 0.0) 
+            indirectDiffuseColor = indirectRefColor; // mirrors are treated as diffuse materials
+        indirect_sampling_sum += isLight ? indirectDiffuseColor : illumination(indirectHitPoint, indirectDir, indirectNormal, indirectDiffuseColor, indirectSpecularColor);
     }
     // Return the scaled indirect light
-    return ((2.0 * indirect_sampling_sum / float(indirectSamples)) * diffuseColor);
+    return ((indirect_sampling_sum / float(indirectSamples)) * diffuseColor);
 }
 
 // Calculates and returns mirror reflections on a given point
-vec3 reflectionIllumination(vec3 origin, vec3 rayDir, vec3 normal, vec3 reflectiveColor) {
+vec3 reflectionIllumination(vec3 origin, vec3 rayDir, vec3 normal, vec3 refColor) {
     vec3 reflectionSum, mirrorDir;
     for (int i = 0; i < MAX_RAYBOUNCES; i++) {
-        if (i >= rayBounces || length(reflectiveColor) == 0.0) break; // Stop if we reach max number of bounces or hit material that is not reflective
+        if (i >= rayBounces || length(refColor) == 0.0) break; // Stop if we reach max number of bounces or hit material that is not reflective
 
         // Trace the mirror ray and add the result to pixel
-        mirrorDir = vec3(rayDir - 2.0 * dot(rayDir, normal) * normal); // Get the direction of the reflected ray
+        mirrorDir = reflect(rayDir, normal); // Get the direction of the reflected ray
         float t_bounceHit = 50.0;
         bool isLight = false;
-        vec3 bounceDiffuseColor, bounceSpecularColor, bounceReflectiveColor, bounceHitPoint;
-        intersect(origin, mirrorDir, t_bounceHit, 0.01, bounceHitPoint, normal, bounceDiffuseColor, bounceSpecularColor, bounceReflectiveColor, isLight);
+        vec3 bounceDiffuseColor, bounceSpecularColor, bounceRefColor, bounceHitPoint;
+        float hitRoughness;
+        intersect(origin, mirrorDir, t_bounceHit, 0.01, bounceHitPoint, normal, bounceDiffuseColor, bounceSpecularColor, bounceRefColor, hitRoughness, isLight);
         
         vec3 mirror_sample_color = isLight ? bounceDiffuseColor : illumination(bounceHitPoint, mirrorDir, normal, bounceDiffuseColor, bounceSpecularColor);
         
         if (enableRefGI) // Add indirect illumination to reflection
-            mirror_sample_color += indirectIllumination(bounceHitPoint, normal, bounceDiffuseColor);
+            mirror_sample_color += indirectIllumination(bounceHitPoint, mirrorDir, normal, bounceDiffuseColor, hitRoughness);
         else
             mirror_sample_color += ambientLight * bounceDiffuseColor;
 
-        reflectionSum += mirror_sample_color * reflectiveColor;
+        reflectionSum += mirror_sample_color * refColor;
         origin = bounceHitPoint;
         rayDir = mirrorDir;
-        reflectiveColor = bounceReflectiveColor * reflectiveColor;  // Successive ray colors are affected by each reflective surface's color
+        refColor = bounceRefColor * refColor;  // Successive ray colors are affected by each reflective surface's color
     }
     return reflectionSum;
+}
+
+vec3 LessThan(vec3 f, float value) {
+    return vec3(
+        (f.x < value) ? 1.0 : 0.0,
+        (f.y < value) ? 1.0 : 0.0,
+        (f.z < value) ? 1.0 : 0.0);
+}
+          
+vec3 LinearToSRGB(vec3 rgb) {     
+    return mix(
+        pow(rgb, vec3(1.0 / 2.2)) * 1.055 - 0.055,
+        rgb * 12.92,
+        LessThan(rgb, 0.0031308)
+    );
+}
+
+vec3 ACESFilm(vec3 x) {
+    x = ACESInputMat * x;
+    vec3 a = x * (x + 0.0245786) - 0.000090537;
+    vec3 b = x * (0.983729 * x + 0.4329510) + 0.238081;
+    x = a / b;
+    x = ACESOutputMat * x;
+    return clamp(x, 0.0, 1.0);
 }
 
 
@@ -357,11 +390,12 @@ void main() {
     vec3 ray_dir = normalize(ray);
     float t_hit = length(ray); // The far clipping distance
     vec3 pixelColor, diffuseColor, specularColor, reflectiveColor, normal, point;
+    float roughness;
     bool isLight = false;
     randomIncrement = randomseed;
 
     // intersect the ray with objects (tmin is 0, because vertex shader places the origin in near clipping distance)
-    intersect(origin, ray_dir, t_hit, 0.0, point, normal, diffuseColor, specularColor, reflectiveColor, isLight);
+    intersect(origin, ray_dir, t_hit, 0.0, point, normal, diffuseColor, specularColor, reflectiveColor, roughness, isLight);
 
     if (isLight) {  // If the ray hit a light, return its color because it doesn't have any other properties than surface color
         fragColor = vec4(diffuseColor, 1.0);
@@ -377,22 +411,14 @@ void main() {
 
     // ==== INDIRECT ILLUMINATION ====
     if (enableGI)
-        pixelColor += indirectIllumination(point, normal, diffuseColor);
+        pixelColor += indirectIllumination(point, ray_dir, normal, diffuseColor, roughness);
 
     // ==== MIRROR REFLECTION ====
     if (rayBounces > 0 && length(reflectiveColor) > 0.0)
         pixelColor += reflectionIllumination(point, ray_dir, normal, reflectiveColor);
 
-    
     // ACES tonemapping (source: https://github.com/TheRealMJP/BakingLab/blob/master/BakingLab/ACES.hlsl)
-    pixelColor = ACESInputMat * pixelColor;
-
-    vec3 a = pixelColor * (pixelColor + 0.0245786) - 0.000090537;
-    vec3 b = pixelColor * (0.983729 * pixelColor + 0.4329510) + 0.238081;
-    pixelColor = a / b;
-
-    pixelColor = ACESOutputMat * pixelColor;
-    pixelColor = clamp(pixelColor, 0.0, 1.0);
-                
-    fragColor = vec4(pow(pixelColor, vec3(0.45)), 1.0);
+    pixelColor = ACESFilm(pixelColor);
+    pixelColor = LinearToSRGB(pixelColor);
+    fragColor = vec4(pixelColor, 1);
 }

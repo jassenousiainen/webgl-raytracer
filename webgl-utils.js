@@ -3,7 +3,7 @@ function createShader(gl, type, source) {
     gl.shaderSource(shader, source);
     gl.compileShader(shader);
     if (gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-    return shader;
+        return shader;
     }
     console.log(gl.getShaderInfoLog(shader));
     gl.deleteShader(shader);
@@ -15,7 +15,7 @@ function createProgram(gl, vertexShader, fragmentShader) {
     gl.attachShader(GLprogram, fragmentShader);
     gl.linkProgram(GLprogram);
     if (gl.getProgramParameter(GLprogram, gl.LINK_STATUS)) {
-    return GLprogram;
+        return GLprogram;
     }
     console.log(gl.getProgramInfoLog(GLprogram));
     gl.deleteProgram(GLprogram);

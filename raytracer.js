@@ -119,10 +119,12 @@ function updatePlanes() {
         const offsetLoc = gl.getUniformLocation(program, 'planeOffsets[' + i + ']')
         const normalLoc = gl.getUniformLocation(program, 'planeNormals[' + i + ']')
         const colLoc = gl.getUniformLocation(program, 'planeColors[' + i + ']')
+        const planeSpecularLoc = gl.getUniformLocation(program, 'planeSpecular[' + i + ']')
         const planeRoughnessLoc = gl.getUniformLocation(program, 'planeRoughness[' + i + ']')
         gl.uniform1f(offsetLoc, renderPlanes[i].offset)
         gl.uniform3f(normalLoc, renderPlanes[i].x, renderPlanes[i].y, renderPlanes[i].z)
         gl.uniform3f(colLoc, renderPlanes[i].r, renderPlanes[i].g, renderPlanes[i].b)
+        gl.uniform1f(planeSpecularLoc, renderPlanes[i].specular)
         gl.uniform1f(planeRoughnessLoc, renderPlanes[i].roughness)
     }
 }

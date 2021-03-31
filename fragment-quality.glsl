@@ -8,7 +8,7 @@ precision mediump float;
 #define MAX_RAYBOUNCES 5
 #define MAX_GISAMPLES 100
 
-#define specular_exponent 32.0
+#define specular_exponent 128.0
 #define EPSILON 0.001
 #define PI 3.141593
 #define PI2 6.283185
@@ -44,6 +44,7 @@ uniform int numPlanes;
 uniform float planeOffsets[MAX_PLANES];
 uniform vec3 planeNormals[MAX_PLANES];
 uniform vec3 planeColors[MAX_PLANES];
+uniform float planeSpecular[MAX_PLANES];
 uniform float planeRoughness[MAX_PLANES];
 
 uniform int rayBounces;
@@ -70,7 +71,6 @@ float random( vec2 p ) {
 }
 
 bool intersectSphere(vec3 ray_origin, vec3 ray_direction, vec3 center, float radius, float tmin, inout float t_hit) {
-    float radius_sqr = radius*radius;
     vec3 vec_to_orig = center - ray_origin; 
 
     float t_closest = dot(vec_to_orig , ray_direction); // t at the closest to the sphere's center
@@ -78,6 +78,7 @@ bool intersectSphere(vec3 ray_origin, vec3 ray_direction, vec3 center, float rad
         return false; 
 
     float dist_to_center2 = dot(vec_to_orig, vec_to_orig) - t_closest * t_closest;
+    float radius_sqr = radius*radius;
     if (dist_to_center2 > radius_sqr) // If the smallest distance^2 from the ray to center is larger that radius^2, the ray doesn't intersect
         return false; 
 
@@ -100,7 +101,7 @@ bool intersectPlane(vec3 ray_origin, vec3 ray_direction, float offset, vec3 norm
     
     if (t < t_hit && t > tmin) {
         vec3 tmpPos = ray_origin + ray_direction * t;
-        if (length(size) == 0.0 || (
+        if (size.x + size.y == 0.0 || (
             tmpPos.x < center.x + size.x*0.5 &&
             tmpPos.x > center.x - size.x*0.5 &&
             tmpPos.z < center.z + size.y*0.5 &&
@@ -130,7 +131,7 @@ bool intersect(vec3 ray_origin,
     
     // Intersect spheres
     for (int i = 0; i < MAX_SPHERES; i++) {
-        if (i >= numSpheres) break;
+        if (i == numSpheres) break;
         if (intersectSphere(ray_origin, ray_direction, sphereCenters[i], 0.8, tmin, t_hit)) {
             idx = i;
             intersected = 1;
@@ -139,7 +140,7 @@ bool intersect(vec3 ray_origin,
 
     // Intersect planes
     for (int i = 0; i < MAX_PLANES; i++) {
-        if (i >= numPlanes) break;
+        if (i == numPlanes) break;
         vec3 planeNormal = planeNormals[i];
         bool tmp = false;
         if (enablePlaneBacksides || dot(ray_direction, planeNormal) < 0.0)
@@ -153,7 +154,7 @@ bool intersect(vec3 ray_origin,
 
     // Intersect lights to make them visible
     for (int i = 0; i < MAX_LIGHTS; i++) {
-        if (i >= numLights) break;
+        if (i == numLights) break;
         vec3 center = lightPos[i];
         vec2 size = lightSize[i];
         bool tmp = false;
@@ -180,16 +181,16 @@ bool intersect(vec3 ray_origin,
             normal *= -1.0;
     }
     else if (intersected == 2) {
-        if (enablePlaneMirrors) {
+        if (!enablePlaneMirrors) {
+            diffuseColor = planeColors[idx];
+            specularColor = planeSpecular[idx] * vec3(1.0, 1.0, 1.0);
+            reflectiveColor = vec3(0.0);
+            roughness = planeRoughness[idx];
+        } else {
             diffuseColor = planeColors[idx]*0.01;
-            specularColor = vec3(0, 0, 0);
+            specularColor = vec3(0.0);
             reflectiveColor = planeColors[idx];
             roughness = 1.0;
-        } else {
-            diffuseColor = planeColors[idx];
-            specularColor = vec3(0, 0, 0);
-            reflectiveColor = vec3(0, 0, 0);
-            roughness = planeRoughness[idx];
         }
         if (dot(normal, -ray_direction) < 0.0) // Backside shading: flip normal if ray and normal are on different sides
             normal *= -1.0;
@@ -260,7 +261,7 @@ vec3 shadePhong(vec3 ray_direction, vec3 normal, vec3 dir_to_light, vec3 inciden
         return incident_intensity * (diffuse + specular);
     }
 
-    return vec3(0, 0, 0);
+    return vec3(0.0);
 }
 
 // Calculates and returns specular and diffuse illumination from all lights on a given point
@@ -296,7 +297,8 @@ vec3 illumination(vec3 point, vec3 ray_dir, vec3 normal, vec3 diffuseColor, vec3
     return illuminationColor;
 }
 
-vec3 randomHemisphereDir(vec2 rand) {
+// Get random point in unit sphere
+vec3 randomUnitsphereDir(vec2 rand) {
     float z = random(rand) * 2.0 - 1.0;
     float a = random(rand) * PI2;       // uniform angle on [0, 2*pi]
     float r = sqrt(1.0 - z * z);        // uniform radius on hemisphere
@@ -308,12 +310,12 @@ vec3 randomHemisphereDir(vec2 rand) {
 vec3 indirectIllumination(vec3 point, vec3 rayDir, vec3 normal, vec3 diffuseColor, float roughness) {
     if (length(diffuseColor) == 0.0) return vec3(0,0,0); // don't do unneeded calculations if the surface doesn't have a diffuse color
 
-    // Sample rays uniformly over hemisphere with spherical coordinates
     vec3 indirect_sampling_sum;
     for (int k = 0; k < MAX_GISAMPLES; k++) {
-        if (k >= indirectSamples) break;
+        if (k == indirectSamples) break;
 
-        vec3 diffuseDir = normalize(normal + randomHemisphereDir(point.xy));
+        // Direction is calculated with Lambert's cosine law (https://raytracing.github.io/books/RayTracingInOneWeekend.html#diffusematerials)
+        vec3 diffuseDir = normalize(normal + randomUnitsphereDir(point.xy));
         vec3 mirrorDir = reflect(rayDir, normal);
         vec3 indirectDir = normalize(mix(mirrorDir, diffuseDir, roughness));
 
@@ -336,7 +338,7 @@ vec3 indirectIllumination(vec3 point, vec3 rayDir, vec3 normal, vec3 diffuseColo
 vec3 reflectionIllumination(vec3 origin, vec3 rayDir, vec3 normal, vec3 refColor) {
     vec3 reflectionSum, mirrorDir;
     for (int i = 0; i < MAX_RAYBOUNCES; i++) {
-        if (i >= rayBounces || length(refColor) == 0.0) break; // Stop if we reach max number of bounces or hit material that is not reflective
+        if (i == rayBounces || length(refColor) == 0.0) break; // Stop if we reach max number of bounces or hit material that is not reflective
 
         // Trace the mirror ray and add the result to pixel
         mirrorDir = reflect(rayDir, normal); // Get the direction of the reflected ray

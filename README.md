@@ -13,10 +13,12 @@ The program uses no vertex buffers, instead it uses the indices of the three ver
 - Phong shading model for diffuse and specular illumination
 - Supports point lights and rectangle area lights with customizable size
 - Smooth shadows for area lights with customizable number of samples
-- Global illumination with customizable number of samples
+- Indirect illumination with customizable number of samples and per-material roughness factor
 - Mirror reflections with customizable number of bounces (also GI in reflections)
 - Free-fly perspective camera, use WASD -keys to move and mouse while holding left mouse button to look around
 - ACES tonemapping
+- Two shaders: fast and quality (fast is recommended, as it provides up to 10x performance)
+- Fast shader includes optimizations such as: dynamic shadow sampling and semi-random indirect sampling using fibonacci sphere
 
 Note that I have made this application just for the purpose of learning WebGL, so there might be multiple bugs and errors.
 

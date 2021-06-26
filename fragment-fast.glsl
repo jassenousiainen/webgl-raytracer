@@ -414,8 +414,8 @@ vec3 directIlluminationFast(vec3 P, vec3 N, vec3 diffuseColor) {
     return illuminationColor;
 }
 
-float G1_Smith(float alpha_precalc, float NdotL) {
-    return 2.0 * NdotL / (NdotL + sqrt(alpha_precalc * square(NdotL)));
+float G1_Smith(float alpha_sqr, float NdotL) {
+    return 2.0 * NdotL / (NdotL + sqrt(alpha_sqr + (1.0 - alpha_sqr) * square(NdotL)));
 }
 
 // Algorithm: http://jcgt.org/published/0007/04/01/
@@ -463,14 +463,13 @@ vec3 indirectIlluminationGGX(vec3 P, vec3 V, vec3 N, vec3 diffuse, float roughne
     vec3 indirect_sampling_sum;
     mat3 basis = construct_ONB_frisvad(N);
     float VNDF_alpha = square(roughness);
-    float G1_alpha = square(max(roughness, 0.02));
-    float G1_alpha2 = square(G1_alpha) + (1.0 - square(G1_alpha));
+    float G1_alpha = square(square(max(roughness, 0.02)));
 
     for (int i = 0; i < indirectSamples; i++) {
 		vec3 H = importanceSampleGGX_VNDF(vec2(random(P.xz), random(P.xy)), VNDF_alpha, V, basis);
 		vec3 R = reflect(V, H);
         float NoR = max(0.0, dot(N, R));
-        float G1_NoR = G1_Smith(G1_alpha2, NoR);
+        float G1_NoR = G1_Smith(G1_alpha, NoR);
         R = normalize(R);
 
         float hitDist = 20.0;

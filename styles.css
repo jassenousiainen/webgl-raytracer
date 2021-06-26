@@ -22,7 +22,7 @@
     --purple: #6f42c1;
     --purple-dark: rgb(112, 48, 160);
 }
-  /*------------------------*/
+/*------------------------*/
 
 html {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -45,11 +45,29 @@ canvas {
     top: 1em;
     right: 1em;
     width: 250px;
-    padding: 0 1em 1em 1em;
+    padding: 0 0.2em 1em 1em;
     background-color: rgb(255 255 255 / 60%);
     border-radius: 15px;
     max-height: 95%;
-    overflow: auto;
+    overflow-y: scroll;
+    overflow-x: hidden;
+}
+
+.controls::-webkit-scrollbar-track {
+    /*-webkit-box-shadow: inset 0 0 6px rgba(0,0,0,0.3);*/
+ 	/*border-radius: 10px;*/
+}
+.controls::-webkit-scrollbar {
+ 	width: 1em;
+}
+.controls::-webkit-scrollbar-thumb {
+    background-color: var(--blue);
+    border: 5px solid transparent;
+    border-radius: 15px;
+    background-clip: padding-box;
+}
+.controls::-webkit-scrollbar-thumb:hover {
+	background-color: var(--darkblue);
 }
 
 .controls .section {

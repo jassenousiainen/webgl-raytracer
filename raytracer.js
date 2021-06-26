@@ -27,7 +27,7 @@ function drawScene(now) {
     fpsElem.innerText = Math.floor(1.0/deltaTime);
 
     if (mousePressed || keyDownW || keyDownA || keyDownS || keyDownD) { // Camera movement is tied to framerate to make it smoother
-        updateCamera()
+        updateCamera(deltaTime)
     }
 
     updateLightRotation(deltaTime)
@@ -44,7 +44,7 @@ requestAnimationFrame(drawScene);
 
 
 // ===== UNIFORM UPDATES =====
-let enableGI = false
+let enableGI = true
 let enableRefGI = false
 let indirectSamples = 50
 let reflectionBounces = 3
@@ -72,24 +72,24 @@ let translationMatrix = mat4.create()
 let viewMatrix = mat4.create()
 let inverseProjectionViewMatrix = mat4.create()
 
-function updateCamera() {
+function updateCamera(delta) {
     if (keyDownW) {
-        camX += Math.cos(pitch) * Math.cos(yaw + (Math.PI/2)) * 0.05;
-        camY += Math.sin(pitch) * 0.05;
-        camZ -= Math.cos(pitch) * Math.sin(yaw + (Math.PI/2)) * 0.05;
+        camX += delta*4 * Math.cos(pitch) * Math.cos(yaw + (Math.PI/2));
+        camY += delta*4 * Math.sin(pitch);
+        camZ -= delta*4 * Math.cos(pitch) * Math.sin(yaw + (Math.PI/2));
     }
     if (keyDownS) {
-        camX -= Math.cos(pitch) * Math.cos(yaw + (Math.PI/2)) * 0.05;
-        camY -= Math.sin(pitch) * 0.05;
-        camZ += Math.cos(pitch) * Math.sin(yaw + (Math.PI/2)) * 0.05;
+        camX -= delta*4 * Math.cos(pitch) * Math.cos(yaw + (Math.PI/2));
+        camY -= delta*4 * Math.sin(pitch);
+        camZ += delta*4 * Math.cos(pitch) * Math.sin(yaw + (Math.PI/2));
     }
     if (keyDownA) {
-        camX += Math.cos(yaw + Math.PI) * 0.05;
-        camZ -= Math.sin(yaw + Math.PI) * 0.05;
+        camX += delta*4 * Math.cos(yaw + Math.PI);
+        camZ -= delta*4 * Math.sin(yaw + Math.PI);
     }
     if (keyDownD) {
-        camX += Math.cos(yaw) * 0.05;
-        camZ -= Math.sin(yaw) * 0.05;
+        camX += delta*4 * Math.cos(yaw);
+        camZ -= delta*4 * Math.sin(yaw);
     }
 
     mat4.perspective(projectionMatrix, 0.6, gl.canvas.width / gl.canvas.height, near, far)  // perspective matrix
@@ -171,7 +171,7 @@ function updateLights() {
         const light = renderLights[i];
         const posLoc = gl.getUniformLocation(program, 'lightPos[' + i + ']')
         const sizeLoc = gl.getUniformLocation(program, 'lightSize[' + i + ']')
-        const colLoc = gl.getUniformLocation(program, 'lightIntensity[' + i + ']')
+        const colLoc = gl.getUniformLocation(program, 'lightBrightness[' + i + ']')
         const spotLoc = gl.getUniformLocation(program, 'lightSpot[' + i + ']')
         gl.uniform3f(posLoc, light.x, light.y, light.z)
         gl.uniform2f(sizeLoc, enableAreaLights ? light.sizeX : 0, enableAreaLights ? light.sizeY : 0)
@@ -209,7 +209,7 @@ function updateRenderingSettings() {
     gl.uniform1i(gl.getUniformLocation(program, 'shadowSamples'), Math.pow(shadowDim, 2)) // number of samples is forced to power of 2
     gl.uniform1i(gl.getUniformLocation(program, 'enablePlaneBacksides'), enablePlaneBacksides)
     gl.uniform1i(gl.getUniformLocation(program, 'enablePlaneMirrors'), enablePlaneMirrors)
-    gl.uniform2f(gl.getUniformLocation(program, 'attenuation'), quadraticAttenuation, linearAttenuation)
+    gl.uniform2f(gl.getUniformLocation(program, 'attenuationFactor'), quadraticAttenuation, linearAttenuation)
 }
 
 updateCamera()

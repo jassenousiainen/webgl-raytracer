@@ -9,18 +9,17 @@ The program uses no vertex buffers, instead it uses the indices of the three ver
 
 ## Features
 - Fully realtime ray-traced, rasterization is only used for the full screen triangle
+- Free-fly perspective camera, use WASD -keys to move and mouse while holding left mouse button to look around
 - Intersection for sphere and plane primitives (and rectangles with currently only fixed direction)
 - Phong shading model for diffuse and specular illumination
 - Supports point lights and rectangle area lights with customizable size
 - Smooth shadows for area lights with customizable number of samples
-- Indirect illumination with customizable number of samples and per-material roughness factor
 - Mirror reflections with customizable number of bounces (also GI in reflections)
-- Free-fly perspective camera, use WASD -keys to move and mouse while holding left mouse button to look around
+- Indirect illumination using Monte Carlo sampling with customizable number of samples and per-material roughness factor
+- Monte Carlo importance sampling: fibonacci sphere for lambertian diffuse surfaces and VNDF for GGX surfaces
 - ACES tonemapping
-- Two shaders: fast and quality (fast is recommended, as it provides up to 10x performance)
-- Fast shader includes optimizations such as: dynamic shadow sampling and semi-random indirect sampling using fibonacci sphere
+- Fast shader includes optimizations such as: dynamic shadow sampling
 
-Note that I have made this application just for the purpose of learning WebGL, so there might be multiple bugs and errors.
 
 ## Screenshots
 ![screen1](/screenshots/screenshot1.png?raw=true)

@@ -21,15 +21,14 @@ function createProgram(gl, vertexShader, fragmentShader) {
     gl.deleteProgram(GLprogram);
 }
 
-function initializeProgram(gl, vShader, fShader) {
+export function initializeProgram(gl, vShader, fShader) {
     console.log("COMPILING SHADERS");
     const vertexShader = createShader(gl, gl.VERTEX_SHADER, vShader);
     const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fShader);
 
     console.log("CREATING PROGRAM");
-    resize(gl);
-    gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);   // Tell WebGL how to convert from clip space to pixels
-    gl.clearColor(0, 0, 0, 0);                              // Clear the canvas
+    resizeViewport(gl, 1280, 720);
+    gl.clearColor(0, 0, 0, 0); // Clear the canvas
     gl.clear(gl.COLOR_BUFFER_BIT);
     const program = createProgram(gl, vertexShader, fragmentShader);
     gl.useProgram(program); // Tell it to use our program (pair of shaders)
@@ -38,22 +37,18 @@ function initializeProgram(gl, vShader, fShader) {
     return program;
 }
 
-// https://webglfundamentals.org/webgl/lessons/webgl-resizing-the-canvas.html
-function resize(gl) {
-    var realToCSSPixels = window.devicePixelRatio;
-  
-    // Lookup the size the browser is displaying the canvas in CSS pixels
-    // and compute a size needed to make our drawingbuffer match it in
-    // device pixels.
-    var displayWidth  = Math.floor(gl.canvas.clientWidth  * realToCSSPixels);
-    var displayHeight = Math.floor(gl.canvas.clientHeight * realToCSSPixels);
-  
-    // Check if the canvas is not the same size.
-    if (gl.canvas.width  !== displayWidth ||
-        gl.canvas.height !== displayHeight) {
-  
-        // Make the canvas the same size
-        gl.canvas.width  = displayWidth;
-        gl.canvas.height = displayHeight;
-    }
+export function createAndSetupTexture(gl) {
+    const texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return texture;
   }
+
+export function resizeViewport(gl, width, height) {
+    gl.canvas.width = width;
+    gl.canvas.height = height;
+    gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+}

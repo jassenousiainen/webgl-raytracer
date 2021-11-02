@@ -1,0 +1,29 @@
+{
+  "name": "webgl-raytracer",
+  "version": "1.0.0",
+  "description": "A simple realtime raytracer made with JavaScript and WebGL. Requires browser with WebGL 2.0 support (Edge Chromium gives best peformance) and a somewhat powerful GPU.",
+  "main": "index.js",
+  "scripts": {
+    "start": "webpack serve --mode development",
+    "build": "webpack --mode production",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Jasse Nousiainen",
+  "license": "ISC",
+  "dependencies": {
+    "css-loader": "^6.5.0",
+    "gl-matrix": "^3.4.3",
+    "script-loader": "^0.7.2",
+    "style-loader": "^3.3.1",
+    "webpack-cli": "^4.9.1",
+    "webpack-dev-server": "^4.3.1"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.15.8",
+    "@babel/preset-env": "^7.15.8",
+    "babel-loader": "^8.2.3",
+    "glslify-loader": "^2.0.0",
+    "html-webpack-plugin": "^5.5.0",
+    "webpack": "^5.60.0"
+  }
+}

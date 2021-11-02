@@ -1,5 +1,5 @@
 #version 300 es
-precision mediump float;
+precision highp float;
 
 #define MAX_LIGHTS 2
 #define MAX_SPHERES 4
@@ -53,9 +53,14 @@ uniform bool enableRefGI;
 uniform int indirectSamples;
 uniform bool enablePlaneBacksides;
 uniform bool enablePlaneMirrors;
+uniform bool enableTAA;
 
-in lowp vec3 origin;
-in lowp vec3 ray;
+uniform sampler2D u_texture;
+
+in vec3 origin;
+in vec3 ray;
+in vec2 texCoord;
+
 out vec4 fragColor;
 
 
@@ -602,5 +607,9 @@ void main() {
     // ACES tonemapping (source: https://github.com/TheRealMJP/BakingLab/blob/master/BakingLab/ACES.hlsl)
     pixelColor = ACESFilm(pixelColor);
     pixelColor = LinearToSRGB(pixelColor);
-    fragColor = vec4(pixelColor, 1);
+    
+    if (enableTAA)
+        fragColor = 0.1 * vec4(pixelColor, 1) + 0.9 * texture(u_texture, texCoord);
+    else
+        fragColor = vec4(pixelColor, 1);
 }

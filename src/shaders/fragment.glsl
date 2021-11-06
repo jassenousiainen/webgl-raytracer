@@ -566,6 +566,14 @@ vec3 ACESFilm(vec3 x) {
     return clamp(x, 0.0, 1.0);
 }
 
+// Simple color averaging from previous frames
+vec4 averageTAA(vec3 pixelColor) {
+    if (enableTAA)
+        return 0.1 * min(vec4(pixelColor, 1), 1.0) + 0.9 * texture(u_texture, texCoord);
+    else
+        return vec4(pixelColor, 1);
+}
+
 
 void main() {
     vec3 ray_dir = normalize(ray);
@@ -578,8 +586,9 @@ void main() {
     // intersect the ray with objects (tmin is 0, because vertex shader places the origin of the ray in near clipping distance)
     intersect(origin, ray_dir, hit_dist, 0.0, point, normal, diffuseColor, specularColor, reflectiveColor, roughness, intersectLight);
 
-    if (intersectLight) {  // If the ray hit a light, return its color because it doesn't have any other properties than surface color
-        fragColor = vec4(diffuseColor, 1.0);
+    // If the ray hit a light, return its color because it doesn't have any other properties than surface color
+    if (intersectLight) {
+        fragColor = averageTAA(diffuseColor);
         return;
     }
 
@@ -604,12 +613,10 @@ void main() {
     if (rayBounces > 0 && length(reflectiveColor) > 0.0)
         pixelColor += reflectionIllumination(point, ray_dir, normal, reflectiveColor);
 
+    // ==== POST FX & OUTPUT ====
     // ACES tonemapping (source: https://github.com/TheRealMJP/BakingLab/blob/master/BakingLab/ACES.hlsl)
     pixelColor = ACESFilm(pixelColor);
     pixelColor = LinearToSRGB(pixelColor);
     
-    if (enableTAA)
-        fragColor = 0.1 * vec4(pixelColor, 1) + 0.9 * texture(u_texture, texCoord);
-    else
-        fragColor = vec4(pixelColor, 1);
+    fragColor = averageTAA(pixelColor);
 }

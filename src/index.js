@@ -8,7 +8,6 @@ import WorldState from './world-state.json'
 const fpsElem = document.getElementById('fps');
 let usingA = true
 let enableTAA = true
-let runTAA = true
 let rotatingCamera = false
 let keyDownW = false
 let keyDownA = false
@@ -73,7 +72,7 @@ function drawScene(now) {
         frameNumber = 1
     }
 
-    runTAA = enableTAA
+    let runTAA = enableTAA
     if (rotatingCamera || keyDownW || keyDownA || keyDownS || keyDownD) {
         updateCamera(deltaTime)
         rotatingCamera = false
@@ -156,16 +155,15 @@ let rotX = mat4.create()
 let translationMatrix = mat4.create()
 let viewMatrix = mat4.create()
 let inverseProjectionViewMatrix = mat4.create()
-let jitterInverseProjectionViewMatrix = mat4.create()
 
 function updateJitterTAA() {
     const deltaWidth = 1.0 / gl.canvas.width;
     const deltaHeight = 1.0 / gl.canvas.height;
     const jitterX = (Math.random() * 1.5 - 0.75) * deltaWidth
     const jitterY = (Math.random() * 1.5 - 0.75) * deltaHeight
-    const jitterMat = mat4.fromValues(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, jitterX, jitterY, 0, 0)
-    mat4.add(jitterInverseProjectionViewMatrix, inverseProjectionViewMatrix, jitterMat)
-    gl.uniformMatrix4fv(gl.getUniformLocation(program, 'invprojview'), false, jitterInverseProjectionViewMatrix)
+    const jitterMat = mat4.fromValues(0,0,0,0, 0,0,0,0, 0,0,0,0, jitterX,jitterY,0,0)
+    mat4.add(jitterMat, inverseProjectionViewMatrix, jitterMat)
+    gl.uniformMatrix4fv(gl.getUniformLocation(program, 'invprojview'), false, jitterMat)
 }
 
 function updateCamera(delta) {

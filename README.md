@@ -1,7 +1,7 @@
 # WebGL Raytracer
 A simple realtime raytracer made with JavaScript and WebGL. Requires browser with WebGL 2.0 support (Edge Chromium gives best peformance) and a somewhat powerful GPU.
 
-View demo in here: https://jassenousiainen.github.io/
+View demo in here: https://jassenousiainen.github.io/webgl-raytracer/
 
 The ray tracing happens completely in the fragment shader, which is found in the file `fragment.glsl`. The vertex shader only calculates the origin and direction of the rays.
 The program uses no vertex buffers, instead it uses the indices of the three vertices of the fullscreen triangle.

@@ -60,19 +60,15 @@ gl.framebufferTexture2D(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D
 
 // ===== RENDERLOOP =====
 function drawScene(now) {
-    frameNumber += 1
     now = (now || 0) * 0.001
     deltaTime = now - then
     then = now;
-    avgFps += 1.0/deltaTime
-    
-    if (frameNumber == 50) {
-        fpsElem.innerText = Math.round(avgFps/50)
-        avgFps = 0
-        frameNumber = 0
-    }
+    frameNumber += 1
 
-    let runTAA = enableTAA
+    if (frameNumber != 0)
+        avgFps += 1.0/deltaTime
+
+    let runTAA = enableTAA && frameNumber != 0
     if (rotatingCamera || keyDownW || keyDownA || keyDownS || keyDownD) {
         updateCamera(deltaTime)
         rotatingCamera = false
@@ -121,6 +117,12 @@ function drawScene(now) {
         // --- Draw the scene directly to canvas ---
         gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
         gl.drawArrays(gl.TRIANGLES, 0, 3)
+    }
+    
+    if (frameNumber == 50) {
+        fpsElem.innerText = Math.round(avgFps/50)
+        avgFps = 0
+        frameNumber = 0
     }
 
     requestAnimationFrame(drawScene)
@@ -322,6 +324,9 @@ function resizeCanvas() {
 
     resizeViewport(gl, width, height)
     updateCamera()
+
+    // Don't run TAA on first frame after textures have been cleared (they are pure black, which affects the color averaging)
+    frameNumber = -1
 }
 
 resizeCanvas()

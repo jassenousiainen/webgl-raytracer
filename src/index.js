@@ -65,11 +65,11 @@ function drawScene(now) {
     deltaTime = now - then
     then = now;
     avgFps += 1.0/deltaTime
-
+    
     if (frameNumber == 50) {
-        fpsElem.innerText = Math.floor(avgFps/50)
+        fpsElem.innerText = Math.round(avgFps/50)
         avgFps = 0
-        frameNumber = 1
+        frameNumber = 0
     }
 
     let runTAA = enableTAA

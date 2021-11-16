@@ -161,10 +161,10 @@ let inverseProjectionViewMatrix = mat4.create()
 function updateJitterTAA() {
     const deltaWidth = 1.0 / gl.canvas.width;
     const deltaHeight = 1.0 / gl.canvas.height;
-    const jitterX = (Math.random() * 1.5 - 0.75) * deltaWidth
-    const jitterY = (Math.random() * 1.5 - 0.75) * deltaHeight
-    const jitterMat = mat4.fromValues(0,0,0,0, 0,0,0,0, 0,0,0,0, jitterX,jitterY,0,0)
-    mat4.add(jitterMat, inverseProjectionViewMatrix, jitterMat)
+    const jitterX = (Math.random() * 2 - 1) * deltaWidth
+    const jitterY = (Math.random() * 2 - 1) * deltaHeight
+    const jitterMat = mat4.fromValues(1,0,0,0, 0,1,0,0, 0,0,1,0, jitterX,jitterY,0,1)
+    mat4.mul(jitterMat, inverseProjectionViewMatrix, jitterMat)
     gl.uniformMatrix4fv(gl.getUniformLocation(program, 'invprojview'), false, jitterMat)
 }
 

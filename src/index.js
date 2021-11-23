@@ -533,7 +533,35 @@ document.getElementById('planebacksides').addEventListener('input', event => {
     enablePlaneBacksides = event.target.checked
     updateRenderingSettings()
 })
+
+// Extras
 document.getElementById('enablemirrorworld').addEventListener('input', event => {
     enablePlaneMirrors = event.target.checked
+
+    enablePlaneBacksides = false
+    document.getElementById('planebacksides').checked = false
+
+    for (let i = 0; i < WorldState.planes.length; i++) {
+        WorldState.planes[i].enabled = true
+    }
+    document.querySelectorAll('.plane-enable').forEach(item => {
+        item.checked = true
+    })
+
+    enableRefGI = false
+    document.getElementById('enableRefGI').checked = false
+
+    reflectionBounces = 5
+    document.getElementById('reflectionbounces').value = 5
+    document.getElementById('reflectionbounces').nextElementSibling.value = 5
+
+    updatePlanes()
     updateRenderingSettings()
+})
+
+document.getElementById('increasedlimits').addEventListener('input', event => {
+    document.getElementById('indirectsamples').setAttribute("max", 200)
+    document.getElementById('reflectionbounces').setAttribute("max", 100)
+    document.getElementById('fov').setAttribute("max", 179)
+    document.getElementById('fov').setAttribute("min", 1)
 })

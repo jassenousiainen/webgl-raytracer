@@ -492,10 +492,10 @@ vec3 indirectIlluminationGGX(vec3 P, vec3 V, vec3 N, vec3 diffuse, float roughne
 }
 
 // Get semi-random point in unit sphere using fibonacci spiral (https://stackoverflow.com/questions/9600801/evenly-distributing-n-points-on-a-sphere)
-vec3 fibonacciSphereDir(vec2 rand, float sampleIdx, int samples) {
-    float y = (1.0 - (sampleIdx/float(samples-1)) * 2.0) + (random(rand)*0.4-0.2); // y goes from 1 to -1 (with added jitter)
-    float radius = sqrt(1.0 - y*y);                             // radius at y
-    float theta = (PHI * sampleIdx) + (random(rand)*0.5-0.25);  // golden angle increment in spiral (with added jitter)
+vec3 fibonacciSphereDir(vec2 rand, float sampleIdx, float inv_samples, float jitter_scale) {
+    float y = (1.0 - (sampleIdx*inv_samples) * 2.0) + (random(rand)*5.0-2.5)*jitter_scale; // y goes from 1 to -1 (with added jitter)
+    float radius = sqrt(1.0 - y*y); // radius at y
+    float theta = (PHI * sampleIdx) + (random(rand)*10.0-5.0)*jitter_scale; // golden angle increment in spiral (with added jitter)
     return vec3(cos(theta)*radius, y, sin(theta)*radius);
 }
 
@@ -503,10 +503,12 @@ vec3 fibonacciSphereDir(vec2 rand, float sampleIdx, int samples) {
 vec3 indirectIlluminationLambert(vec3 P, vec3 V, vec3 N, vec3 diffuseColor) {
     vec3 indirect_sampling_sum;
     vec3 mirrorDir = reflect(V, N);
+    float inv_samples = 1.0/float(indirectSamples-1);
+    float jitter_scale = pow(float(indirectSamples), -0.5);
 
     for (int i = 0; i < indirectSamples; i++) {
         // Direction is calculated with Lambert's cosine law (https://raytracing.github.io/books/RayTracingInOneWeekend.html#diffusematerials)
-        vec3 diffuseDir = normalize(N + fibonacciSphereDir(P.xy, float(i), indirectSamples));
+        vec3 diffuseDir = normalize(N + fibonacciSphereDir(P.xy, float(i), inv_samples, jitter_scale));
         vec3 R = normalize(mix(mirrorDir, diffuseDir, 1.0));
 
         float hitDist = 10.0;

@@ -1,5 +1,6 @@
 #version 300 es
 precision highp float;
+precision highp sampler2D;
 
 #define MAX_LIGHTS 2
 #define MAX_SPHERES 4
@@ -51,9 +52,12 @@ uniform vec3 ambientLight;
 uniform bool enableGI;
 uniform bool enableRefGI;
 uniform int indirectSamples;
+uniform float rcp_indirectSamples;
+uniform float indirectJitterScale;
 uniform bool enablePlaneBacksides;
 uniform bool enablePlaneMirrors;
 uniform bool enableTAA;
+uniform float u_taaBlendFactor;
 
 uniform sampler2D u_texture;
 
@@ -257,8 +261,8 @@ void getIncidentIntensity(float sample_i, vec3 P, vec3 lightPos, vec3 intensity,
         float inv_dim = 1.0 / shadowDim;
         float cell_sizeX = size.x * inv_dim;
         float cell_sizeY = size.y * inv_dim;
-        float posX = cell_sizeX * (mod(sample_i, shadowDim) + random(P.xy));
-        float posY = cell_sizeY * (floor(sample_i * inv_dim) + random(P.yx));
+        float posX = cell_sizeX * (mod(sample_i, shadowDim) + random(P.xz*P.y));
+        float posY = cell_sizeY * (floor(sample_i * inv_dim) + random(P.yx*P.z));
         float x = lightPos.x - size.x*0.5 + posX;
         float z = lightPos.z - size.y*0.5 + posY;
         L = vec3(x, lightPos.y, z) - P;
@@ -488,12 +492,12 @@ vec3 indirectIlluminationGGX(vec3 P, vec3 V, vec3 N, vec3 diffuse, float roughne
         indirect_sampling_sum += intersectLight ? diffuse2 : G1_NoR * directIlluminationFast(P2, N2, diffuse2+reflective2);
     }
     // Return the scaled indirect light
-    return ((indirect_sampling_sum / float(indirectSamples)) * diffuse);
+    return ((indirect_sampling_sum*rcp_indirectSamples) * diffuse);
 }
 
 // Get semi-random point in unit sphere using fibonacci spiral (https://stackoverflow.com/questions/9600801/evenly-distributing-n-points-on-a-sphere)
 vec3 fibonacciSphereDir(vec2 rand, float sampleIdx, float inv_samples, float jitter_scale) {
-    float y = (1.0 - (sampleIdx*inv_samples) * 2.0) + (random(rand)*5.0-2.5)*jitter_scale; // y goes from 1 to -1 (with added jitter)
+    float y = (1.0 - sampleIdx * inv_samples * 2.0) + (random(rand)*5.0-2.5)*jitter_scale; // y goes from 1 to -1 (with added jitter)
     float radius = sqrt(1.0 - y*y); // radius at y
     float theta = (PHI * sampleIdx) + (random(rand)*10.0-5.0)*jitter_scale; // golden angle increment in spiral (with added jitter)
     return vec3(cos(theta)*radius, y, sin(theta)*radius);
@@ -503,12 +507,11 @@ vec3 fibonacciSphereDir(vec2 rand, float sampleIdx, float inv_samples, float jit
 vec3 indirectIlluminationLambert(vec3 P, vec3 V, vec3 N, vec3 diffuseColor) {
     vec3 indirect_sampling_sum;
     vec3 mirrorDir = reflect(V, N);
-    float inv_samples = 1.0/float(indirectSamples-1);
-    float jitter_scale = pow(float(indirectSamples), -0.5);
+    vec2 rand = P.yx*P.z;
 
     for (int i = 0; i < indirectSamples; i++) {
         // Direction is calculated with Lambert's cosine law (https://raytracing.github.io/books/RayTracingInOneWeekend.html#diffusematerials)
-        vec3 diffuseDir = normalize(N + fibonacciSphereDir(P.xy, float(i), inv_samples, jitter_scale));
+        vec3 diffuseDir = normalize(N + fibonacciSphereDir(rand, float(i)+0.5, rcp_indirectSamples, indirectJitterScale));
         vec3 R = normalize(mix(mirrorDir, diffuseDir, 1.0));
 
         float hitDist = 10.0;
@@ -519,7 +522,7 @@ vec3 indirectIlluminationLambert(vec3 P, vec3 V, vec3 N, vec3 diffuseColor) {
         intersect(P, R, hitDist, 0.01, P2, N2, diffuse2, specular2, reflective2, roughness2, intersectLight);
         indirect_sampling_sum += directIlluminationFast(P2, N2, diffuse2+reflective2);
     }
-    return ((indirect_sampling_sum / float(indirectSamples)) * diffuseColor);
+    return ((indirect_sampling_sum*rcp_indirectSamples) * diffuseColor);
 }
 
 // Calculates and returns mirror reflections on a given point
@@ -571,7 +574,7 @@ vec3 ACESFilm(vec3 x) {
 // Simple color averaging from previous frames
 vec4 averageTAA(vec3 pixelColor) {
     if (enableTAA)
-        return 0.1 * min(vec4(pixelColor, 1), 1.0) + 0.9 * texture(u_texture, texCoord);
+        return u_taaBlendFactor * min(vec4(pixelColor, 1), 1.0) + (1.0-u_taaBlendFactor) * texture(u_texture, texCoord);
     else
         return vec4(pixelColor, 1);
 }

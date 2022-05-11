@@ -4,6 +4,26 @@ import vertexShaderSource from './shaders/vertex.glsl'
 import fragmentShaderSource from './shaders/fragment.glsl'
 import WorldState from './world-state.json'
 
+
+const HALTON_SAMPLES = 36
+let haltonSequence = []
+function CreateHaltonSequence(index, base)
+{
+    let f = 1.0;
+    let r = 0.0;
+    let current = index;
+    do {
+        f = f / base;
+        r = r + f * (current % base);
+        current = Math.floor(current / base);
+    } while (current > 0);
+    return r;
+}
+for (let iter = 0; iter < HALTON_SAMPLES; iter++) {
+    haltonSequence.push([CreateHaltonSequence(iter+1, 2), CreateHaltonSequence(iter+1, 3)]);
+}
+
+
 // ===== INITIALIZATION =====
 const fpsElem = document.getElementById('fps');
 let usingA = true
@@ -13,9 +33,10 @@ let keyDownW = false
 let keyDownA = false
 let keyDownS = false
 let keyDownD = false
-let deltaTime = 0;
-let then = 0;
-let frameNumber = 0;
+let deltaTime = 0
+let then = 0
+let frameNumber = 1
+let jitterSampleIdx = 0
 let avgFps = 0
 
 // Create WebGL 2 context
@@ -32,16 +53,17 @@ const gl = canvas.getContext("webgl2", {
 const program = initializeProgram(gl, vertexShaderSource, fragmentShaderSource)
 
 // Defining uniform locations that are accessed frequently
-const runTAALoc = gl.getUniformLocation(program, 'enableTAA')
-const randLoc = gl.getUniformLocation(program, 'randomseed')
-const sphereZeroPosLoc = gl.getUniformLocation(program, 'sphereCenters[0]')
-const textureLocation = gl.getUniformLocation(program, "u_texture")
+const runTAALoc         = gl.getUniformLocation(program, 'enableTAA')
+const randLoc           = gl.getUniformLocation(program, 'randomseed')
+const sphereZeroPosLoc  = gl.getUniformLocation(program, 'sphereCenters[0]')
+const textureLocation   = gl.getUniformLocation(program, "u_texture")
+const u_taaBlendFactor  = gl.getUniformLocation(program, "u_taaBlendFactor");
 
 
 // --- Framebuffer A ---
 // Create a texture to render to
 const textureA = createAndSetupTexture(gl);
-gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.canvas.width, gl.canvas.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, gl.canvas.width, gl.canvas.height, 0, gl.RGBA, gl.FLOAT, null);
 
 // Create and bind the framebuffer
 const framebufferA = gl.createFramebuffer();
@@ -52,7 +74,7 @@ gl.framebufferTexture2D(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D
 
 // --- Framebuffer B ---
 const textureB = createAndSetupTexture(gl);
-gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.canvas.width, gl.canvas.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, gl.canvas.width, gl.canvas.height, 0, gl.RGBA, gl.FLOAT, null);
 const framebufferB = gl.createFramebuffer();
 gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, framebufferB);
 gl.framebufferTexture2D(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, textureB, 0);
@@ -62,21 +84,28 @@ gl.framebufferTexture2D(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D
 function drawScene(now) {
     now = (now || 0) * 0.001
     deltaTime = now - then
-    then = now;
-    frameNumber += 1
+    then = now
 
-    if (frameNumber != 0)
-        avgFps += 1.0/deltaTime
+    let runTAA = enableTAA
 
-    let runTAA = enableTAA && frameNumber != 0
     if (rotatingCamera || keyDownW || keyDownA || keyDownS || keyDownD) {
         updateCamera(deltaTime)
         rotatingCamera = false
         runTAA = false
+        frameNumber = 1
     }
+
+    if (frameNumber != 1)
+        avgFps += 1.0/deltaTime
+
     if (runTAA) {
         updateJitterTAA()
+        jitterSampleIdx++
     }
+
+    if (!runTAA || jitterSampleIdx >= HALTON_SAMPLES)
+        jitterSampleIdx = 0
+    
     gl.uniform1i(runTAALoc, runTAA)
     
     //updateLightRotation(deltaTime)
@@ -103,6 +132,9 @@ function drawScene(now) {
         // Tell the shader to use texture unit 0 for u_texture
         gl.uniform1i(textureLocation, 0);
 
+        // The amount of how much to blend this frame to the result
+        gl.uniform1f(u_taaBlendFactor, 1.0/frameNumber);
+
         // Render the scene
         gl.drawArrays(gl.TRIANGLES, 0, 3)
 
@@ -119,19 +151,20 @@ function drawScene(now) {
         gl.drawArrays(gl.TRIANGLES, 0, 3)
     }
     
-    if (frameNumber == 50) {
-        fpsElem.innerText = Math.round(avgFps/50)
+    if (frameNumber % 10 == 0) {
+        fpsElem.innerText = Math.round(avgFps/10)
         avgFps = 0
-        frameNumber = 0
     }
 
+    frameNumber++
+    
     requestAnimationFrame(drawScene)
 }
 
 // ===== UNIFORM UPDATES =====
 let enableGI = true
 let enableRefGI = true
-let indirectSamples = 50
+let indirectSamples = 30
 let reflectionBounces = 1
 let enableAreaLights = true;
 let shadowSamples = 9;
@@ -161,8 +194,8 @@ let inverseProjectionViewMatrix = mat4.create()
 function updateJitterTAA() {
     const deltaWidth = 1.0 / gl.canvas.width;
     const deltaHeight = 1.0 / gl.canvas.height;
-    const jitterX = (Math.random() * 2 - 1) * deltaWidth
-    const jitterY = (Math.random() * 2 - 1) * deltaHeight
+    const jitterX = (haltonSequence[jitterSampleIdx][0]*2-1) * deltaWidth
+    const jitterY = (haltonSequence[jitterSampleIdx][1]*2-1) * deltaHeight
     const jitterMat = mat4.fromValues(1,0,0,0, 0,1,0,0, 0,0,1,0, jitterX,jitterY,0,1)
     mat4.mul(jitterMat, inverseProjectionViewMatrix, jitterMat)
     gl.uniformMatrix4fv(gl.getUniformLocation(program, 'invprojview'), false, jitterMat)
@@ -299,6 +332,8 @@ function updateRenderingSettings() {
     gl.uniform1i(gl.getUniformLocation(program, 'enableGI'), enableGI)
     gl.uniform1i(gl.getUniformLocation(program, 'enableRefGI'), enableRefGI)
     gl.uniform1i(gl.getUniformLocation(program, 'indirectSamples'), indirectSamples)
+    gl.uniform1f(gl.getUniformLocation(program, 'rcp_indirectSamples'), 1.0/indirectSamples)
+    gl.uniform1f(gl.getUniformLocation(program, 'indirectJitterScale'), Math.pow(indirectSamples, -0.5))
     gl.uniform1i(gl.getUniformLocation(program, 'rayBounces'), reflectionBounces)
     const shadowDim = Math.floor(Math.sqrt(shadowSamples))
     gl.uniform1f(gl.getUniformLocation(program, 'shadowDim'), shadowDim)
@@ -326,7 +361,7 @@ function resizeCanvas() {
     updateCamera()
 
     // Don't run TAA on first frame after textures have been cleared (they are pure black, which affects the color averaging)
-    frameNumber = -1
+    frameNumber = 1
 }
 
 resizeCanvas()
@@ -563,5 +598,6 @@ document.getElementById('increasedlimits').addEventListener('input', event => {
     document.getElementById('indirectsamples').setAttribute("max", 200)
     document.getElementById('reflectionbounces').setAttribute("max", 100)
     document.getElementById('fov').setAttribute("max", 179)
-    document.getElementById('fov').setAttribute("min", 1)
+    document.getElementById('fov').setAttribute("min", 0.01)
+    document.getElementById('fov').setAttribute("step", 0.01)
 })

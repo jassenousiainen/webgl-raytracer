@@ -16,7 +16,7 @@ The program uses no vertex buffers, instead it uses the indices of the three ver
 - Phong shading model for direct diffuse/specular illumination and GGX for rough surfaces
 - Indirect illumination using Monte Carlo sampling with customizable number of samples and per-material roughness factor
 - Monte Carlo importance sampling: fibonacci sphere for lambertian diffuse surfaces and VNDF for GGX surfaces
-- Simple implementation of TAA (Temporal Anti Aliasing), which is mainly used to reduce noise produced by sampling
+- Temporal Anti-Aliasing (TAA)
 - ACES tonemapping
 
 
@@ -24,3 +24,4 @@ The program uses no vertex buffers, instead it uses the indices of the three ver
 ![screen1](/screenshots/screenshot1.png?raw=true)
 ![screen2](/screenshots/screenshot2.png?raw=true)
 ![screen3](/screenshots/screenshot3.png?raw=true)
+![screen4](/screenshots/screenshot4.png?raw=true)

@@ -25,3 +25,4 @@ The program uses no vertex buffers, instead it uses the indices of the three ver
 ![screen2](/screenshots/screenshot2.png?raw=true)
 ![screen3](/screenshots/screenshot3.png?raw=true)
 ![screen4](/screenshots/screenshot4.png?raw=true)
+![screen5](/screenshots/screenshot5.png?raw=true)

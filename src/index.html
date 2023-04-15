@@ -2,18 +2,22 @@
     <body>
         <canvas id="canvas" width="1280" height="720" onContextMenu="event.preventDefault()"></canvas>
         <div id="fps-container"><span id="fps"></span> FPS</div>
+        <label id="ui_switch">
+            Show UI
+            <input type="checkbox" id="enableUI" checked>
+        </label>
         <div class="controls">
             <div class="section">
                 <h3>About</h3>
-                <p>Use WASD -keys to move around. Click right mousebutton to look around.</p>
-                <p>Check out the <a href="https://github.com/jassenousiainen/webgl-raytracer">repository</a></p>
+                <p>Use WASD -keys to move. Click right mousebutton to look around.</p>
+                <p><a href="https://github.com/jassenousiainen/webgl-raytracer">GitHub</a></p>
             </div>
             <div class="section">
                 <h3>Rendering settings</h3>
                 <label class='switch'>
                     <input type="checkbox" id="enableTAA" checked>
                     <span class='slider'></span>
-                    TAA
+                    TAA + accumulation
                 </label>
                 <br>
                 <label class='switch'>
@@ -28,18 +32,18 @@
                     Indirect in mirrors
                 </label>
                 <br><br>
-                Number of indirect samples:
+                Number of indirect spp:
                 <br>
                 <div class="slider_container">
-                    <input type="range" value="30" id="indirectsamples" min="1" max="100" oninput="this.nextElementSibling.value = this.value">
-                    <output>30</output>
+                    <input type="range" value="10" id="indirectsamples" min="1" max="100">
+                    <output>10</output>
                 </div>
                 <br>
-                Number of direct samples:
+                Number of direct spp:
                 <br>
                 <div class="slider_container">
-                    <input type="range" value="3" id="directsamples" min="1" max="6" oninput="this.nextElementSibling.value = this.value*this.value">
-                    <output>9</output>
+                    <input type="range" value="2" id="directsamples" min="1" max="6" oninput="this.nextElementSibling.value = this.value*this.value">
+                    <output>4</output>
                 </div>
                 <br>
                 Mirror reflection bounces:
@@ -63,10 +67,6 @@
                     <span class='slider'></span>
                     Area lights on/off
                 </label>
-                <br><br>
-                Attenuation:<br>
-                <input type="range" min="0" max="10" step="0.01" value="1.5" id="quadratic" class="attenuation"> Quadratic
-                <input type="range" min="0" max="10" step="0.01" value="0" id="linear" class="attenuation"> Linear
                 <br>
             </div>
             <div class="section" id="planecontrols">

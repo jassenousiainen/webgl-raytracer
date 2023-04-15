@@ -42,13 +42,13 @@ canvas {
 */
 .controls {
     position: absolute;
-    top: 1em;
+    top: 4vh;
     right: 1em;
     width: 250px;
     padding: 0 0.2em 1em 1em;
     background-color: rgb(255 255 255 / 60%);
     border-radius: 15px;
-    max-height: 95%;
+    max-height: 91vh;
     overflow-y: scroll;
     overflow-x: hidden;
 }
@@ -107,8 +107,15 @@ table.sliders {
 
 #fps-container {
     position: absolute;
-    top: 1em;
+    top: 1vh;
     left: 1em;
+    color: white;
+}
+
+#ui_switch {
+    position: absolute;
+    top: 1vh;
+    right: 1em;
     color: white;
 }
 

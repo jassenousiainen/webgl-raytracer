@@ -9,6 +9,7 @@ precision highp sampler2D;
 #define specular_exponent 128.0
 #define EPSILON 0.001
 #define PI 3.141593
+#define PI_RCP 0.318309886
 #define PI2 6.283185
 #define PHI 2.399963 // golden angle in radians
 
@@ -22,16 +23,29 @@ const mat3 ACESOutputMat = mat3(
     -0.07367, -0.00605,  1.07602);
 
 float randomIncrement;
-uniform float randomseed;
+
+uniform bool u_runTAA;
+uniform bool u_enableGI;
+uniform bool u_enableRefGI;
+uniform bool u_enableTonemapping;
+uniform bool u_enableGammaCorrection;
+uniform bool u_enablePlaneBacksides;
+uniform bool u_enablePlaneMirrors;
+
+uniform float u_randomseed;
+uniform float u_taaBlendFactor;
+
+uniform int u_directSamples;
+uniform float u_directSamplesSqrt;
+uniform int u_indirectSamples;
+uniform float u_rcp_indirectSamples;
+uniform int u_reflectionBounces;
 
 uniform int numLights;
 uniform vec3 lightPos[MAX_LIGHTS];
 uniform vec2 lightSize[MAX_LIGHTS];
-uniform vec3 lightBrightness[MAX_LIGHTS];
+uniform vec3 u_lightEmission[MAX_LIGHTS];
 uniform vec2 lightSpot[MAX_LIGHTS];
-uniform int shadowSamples;
-uniform float shadowDim;
-uniform vec2 attenuationFactor;
 
 uniform int numSpheres;
 uniform vec3 sphereCenters[MAX_SPHERES];
@@ -47,26 +61,16 @@ uniform vec3 planeColors[MAX_PLANES];
 uniform float planeSpecular[MAX_PLANES];
 uniform float planeRoughness[MAX_PLANES];
 
-uniform int rayBounces;
 uniform vec3 ambientLight;
-uniform bool enableGI;
-uniform bool enableRefGI;
-uniform int indirectSamples;
-uniform float rcp_indirectSamples;
-uniform float indirectJitterScale;
-uniform bool enablePlaneBacksides;
-uniform bool enablePlaneMirrors;
-uniform bool enableTAA;
-uniform float u_taaBlendFactor;
 
-uniform sampler2D u_texture;
+uniform sampler2D u_accumTexture;
 
 in vec3 origin;
 in vec3 ray;
 in vec2 texCoord;
 
-out vec4 fragColor;
-
+layout (location = 0) out vec4 out_finalColor;
+layout (location = 1) out vec4 out_accumulateColor;
 
 /* ==== HELPER FUNCTIONS ==== */
 // https://stackoverflow.com/a/10625698
@@ -153,7 +157,7 @@ bool intersectPlane(vec3 ray_origin, vec3 ray_direction, float offset, vec3 norm
 // Intersects with all of the objects in the world and returns closest hit (note the use of "out" arguments)
 bool intersect(vec3 ray_origin,
             vec3 ray_direction,
-            inout float t_hit,
+            float t_hit,
             float tmin,
             out vec3 position,
             out vec3 normal,
@@ -177,7 +181,7 @@ bool intersect(vec3 ray_origin,
     // Intersect planes
     for (int i = 0; i < numPlanes; i++) {
         vec3 planeNormal = planeNormals[i];
-        if (enablePlaneBacksides || dot(ray_direction, planeNormal) < 0.0) {
+        if (u_enablePlaneBacksides || dot(ray_direction, planeNormal) < 0.0) {
             if (intersectPlane(ray_origin, ray_direction, planeOffsets[i], planeNormal, vec3(0,0,0), vec2(0,0), tmin, t_hit)) {
                 normal = planeNormal;
                 idx = i;
@@ -191,7 +195,7 @@ bool intersect(vec3 ray_origin,
         intersectLight = false;
         for (int i = 0; i < numLights; i++) {
             vec3 center = lightPos[i];
-            vec2 size = lightSize[i];
+            vec2 size = 2.0*lightSize[i];
             bool tmp = false;
             if (size.x > 0.0 && size.y > 0.0) // area light
                 tmp = intersectPlane(ray_origin, ray_direction, center.y, vec3(0.0,1.0,0.0), center, size, tmin, t_hit);
@@ -217,7 +221,7 @@ bool intersect(vec3 ray_origin,
             normal *= -1.0;
     }
     else if (intersected == 2) { // Plane
-        if (!enablePlaneMirrors) {
+        if (!u_enablePlaneMirrors) {
             diffuseColor = planeColors[idx];
             specularColor = planeSpecular[idx] * vec3(1.0, 1.0, 1.0);
             reflectiveColor = vec3(0.0);
@@ -232,13 +236,10 @@ bool intersect(vec3 ray_origin,
             normal *= -1.0;
     }
     else if (intersected == 3) { // Light
-        float spot_falloff = 1.0;
-        vec2 spot = lightSpot[idx];
-        if (spot.x > 0.0) {
-            float dot_to_light = dot(ray_direction, vec3(0.0, 1.0, 0.0));
-            spot_falloff = (dot_to_light > spot.x) ? pow(dot_to_light, spot.y) : 0.0;
-        }
-        diffuseColor = spot_falloff * lightBrightness[idx] * 0.2;
+        float cosHalfFOV = cos(0.5*lightSpot[idx].x);
+        vec3 N_light = vec3(0, -1, 0);
+        float cone = (dot(-ray_direction, N_light) > cosHalfFOV) ? 1.0 : 0.0;
+        diffuseColor = cone * u_lightEmission[idx] * 0.1;
         intersectLight = true;
     }
 
@@ -246,7 +247,7 @@ bool intersect(vec3 ray_origin,
 }
 
 // Faster intersect function for shadows
-bool intersectShadowRay(vec3 ray_origin, vec3 ray_direction, inout float t_hit) {
+bool intersectShadowRay(vec3 ray_origin, vec3 ray_direction, float t_hit) {
     for (int i = 0; i < numSpheres; i++)
         if (intersectSphere(ray_origin, ray_direction, sphereCenters[i], 0.8, EPSILON, t_hit))
             return true;
@@ -256,101 +257,166 @@ bool intersectShadowRay(vec3 ray_origin, vec3 ray_direction, inout float t_hit) 
     return false;
 }
 
-void getIncidentIntensity(float sample_i, vec3 P, vec3 lightPos, vec3 intensity, vec2 size, vec2 spot, bool isAreaLight, out float L_dist, out vec3 L, out vec3 incidentIntensity) {
-    if (isAreaLight) { // Get jittered position on the light plane
-        float inv_dim = 1.0 / shadowDim;
-        float cell_sizeX = size.x * inv_dim;
-        float cell_sizeY = size.y * inv_dim;
-        float posX = cell_sizeX * (mod(sample_i, shadowDim) + random(P.xz*P.y));
-        float posY = cell_sizeY * (floor(sample_i * inv_dim) + random(P.yx*P.z));
-        float x = lightPos.x - size.x*0.5 + posX;
-        float z = lightPos.z - size.y*0.5 + posY;
-        L = vec3(x, lightPos.y, z) - P;
-    } else { // point light
-        L = lightPos - P; 
-    }
+/**
+ *  Sample an area light uniformly.
+ *  @param  xform   Position and orientation of the light in 4x4 matrix.
+ *  @param  size    Size of the rectangle in 2D.
+ *  @return vec3    Sampled position.
+ */
+vec3 sampleAreaLightUniform(in vec3 pos, in vec2 size, in vec2 rnd_seed) {
+    float rnd_x = size.x * (random(rnd_seed) * 2.0 - 1.0);
+    float rnd_y = size.y * (random(rnd_seed.yx) * 2.0 - 1.0);
+    return vec3(pos.x + rnd_x, pos.y, pos.z + rnd_y);//(xform * vec4(rnd_x, 0.0, rnd_y, 1.0)).xyz;
+}
 
-    L_dist = length(L);
-    float attenuation = 1.0 / (attenuationFactor.x*square(L_dist) + attenuationFactor.y*L_dist);
-    L = normalize(L);
+/**
+ *  Sample an area light uniformly using stratification.
+ *  @param  xform       Position and orientation of the light in 4x4 matrix.
+ *  @param  size        Size of the rectangle in 2D.
+ *  @param  sample_i    Index of current sample.
+ *  @return vec3    Sampled position.
+ */
+vec3 sampleAreaLightStratified(vec3 pos, vec2 size, vec2 rnd_seed, float sample_i) {
+    float inv_dim = 1.0 / u_directSamplesSqrt;
+    float cell_sizeX = size.x*2.0 * inv_dim;
+    float cell_sizeY = size.y*2.0 * inv_dim;
+    float posX = cell_sizeX * (mod(sample_i, u_directSamplesSqrt) + random(rnd_seed));
+    float posY = cell_sizeY * (floor(sample_i * inv_dim) + random(rnd_seed.yx));
+    return vec3(pos.x - size.x + posX, pos.y, pos.z - size.y + posY);
+}
 
+/**
+ *  Compute irradiance intensity from an area light source at a given world point.
+ *  @param  PDF The value of the probability density function at the sampled point.
+ *  @return float   intersity
+ */
+float areaLightIrradiance(vec3 L, float L_dist, vec3 N_light, float L_dot_Ns, float cosHalfFOV, float PDF_rcp) {
+    float L_dot_Nl = dot(-L, N_light);
+    float cos_theta_li = max(0.0, L_dot_Nl / (L_dist * 1.0));
+    float cos_theta_i = max(0.0, L_dot_Ns / (L_dist * 1.0));
+
+    float G = cos_theta_li / square(L_dist);
+    float BRDF = 1.0f;
+    
     // Spotlight effect
-    // spot.x is the size of the spot and spot.y is the exponent to produce smooth falloff
-    float falloff = 1.0;
-    if (spot.x > 0.0) {
-        float dot_to_light = dot(L, vec3(0.0, 1.0, 0.0));
-        falloff = (dot_to_light > spot.x) ? pow(dot_to_light, spot.y) : 0.0;
-    }
+    float cone = (L_dot_Nl > cosHalfFOV) ? 1.0 : 0.0;
 
-    incidentIntensity = intensity * attenuation * falloff;
+    return cone * BRDF * cos_theta_i * G * PDF_rcp;
+}
+
+/**
+ *  Compute irradiance intensity from a point light source at a given world point.
+ *  Produces soft spotlight edges, as if the light were an area light.
+ *  @return float   intersity
+ */
+float areaPointLightIrradiance(vec3 L, float L_dist, vec3 N_light, float L_dot_Ns, float cosHalfFOV, float PDF_rcp) {
+    float L_dot_Nl = dot(-L, N_light);
+    float cos_theta_li = max(0.0, L_dot_Nl / L_dist);
+    float cos_theta_i = max(0.0, L_dot_Ns / L_dist);
+    
+    // Spotlight effect
+    float cone = max(0.0, min(1.0, 4.0 * (max(0.0, L_dot_Nl) - cosHalfFOV) / (1.0 - cosHalfFOV)));
+
+    return cone * cos_theta_i * cos_theta_li * PDF_rcp / square(L_dist);
+}
+
+/**
+ *  Compute irradiance intensity from a point light source at a given world point.
+ *  @return float   intersity
+ */
+float pointLightIrradiance(vec3 L, float L_dist, vec3 N_light, float L_dot_Ns, float cosHalfFOV) {
+    float Pcos = max(0.0, L_dot_Ns ); // Cosine of angle of surface normal and light vector
+    float Lcos = max(0.0, dot(N_light, -L)); // Angle cos of light normal and light vector
+    float attenuation = 1.0/square(L_dist);
+    float cone = max(0.0, min(1.0, 4.0 * (Lcos - cosHalfFOV) / (1.0 - cosHalfFOV)));
+    
+    return PI_RCP * attenuation * Pcos * Lcos * cone;
 }
 
 /** 
-* Phong shading 
-*   - does not take into account if light and normal are on the same side or not
-*
-*   V:    View vector towards surface
-*   N:    Normal of surface
-*   L:    Vector towards light from surface
-*/
+ *  Phong shading. 
+ *  Does not take into account if light and normal are on the same side or not.
+ *  @param  V   View vector towards surface.
+ *  @param  N   Normal of surface.
+ *  @param  L   Vector towards light from surface.
+ *  @return vec3    Color.
+ */
 vec3 shadePhong(vec3 V, vec3 N, vec3 L, vec3 diffuseColor, vec3 specularColor) {
-    vec3 diffuse = diffuseColor * dot(N, L); // Diffuse brightness depends on the angle between light and normal
-        
     vec3 R = reflect(-L, N); // Reflection vector pointing away from object
     float reflection_intensity = pow(max(0.0, dot(R, -V)), specular_exponent); // Specular intensity depends on how closely the reflection vector points to the camera
     vec3 specular = specularColor * reflection_intensity;
 
-    return diffuse + specular;
+    return diffuseColor + specular;
 }
 
-// Calculates and returns specular and diffuse illumination from all lights on a given point
-vec3 directIllumination(vec3 P, vec3 V, vec3 N, vec3 diffuseColor, vec3 specularColor, bool useSampling) {
+/**
+ *  Calculates and returns specular and diffuse illumination from all lights on a given point
+ *  @return vec3    Color of surface point.
+ */
+vec3 directIllumination(vec3 P, vec3 V, vec3 N_surface, vec3 diffuseColor, vec3 specularColor, bool useSampling) {
     vec3 illuminationColor;
-
+    
+/// @todo   !!! Split area light and point light calculations !!!
     for (int i = 0; i < numLights; i++) {
         vec3 lightPos = lightPos[i];
-        vec3 lightBrightness = lightBrightness[i];
+        vec3 lightEmission = u_lightEmission[i];
         vec2 lightSize = lightSize[i];
-        vec2 lightSpot = lightSpot[i];
-        vec3 light_sum, incidentIntensity, L;
-        float L_dist;
+        float lightCosHalfFOV = cos(0.5*lightSpot[i].x);
+        vec3 N_light = vec3(0, -1, 0);
+        float PDF_rcp = 1.0f;
+        vec2 rnd = P.xy*P.z;
+
         bool isAreaLight = useSampling && lightSize.x > 0.0 && lightSize.y > 0.0;
+        if (isAreaLight) {
+            PDF_rcp = 4.0f * lightSize.x * lightSize.y; // Uniform (i.e., constant) probability over the area of the rectangle.
+        }
+
         int testSamples = isAreaLight ? 5 : 1; // use one sample if calculating pointlights
         int areaShadowSamples = 0;
         bool inLight, inShade = false;
 
+        vec3 shading;
+
         // Get 5 test points to the light (4 corners, 1 center)
         for (int k = 0; k < testSamples; k++) {
-            if (inLight && inShade) break; // best-case-scenaraio: stop after two test samples
+            if (inLight && inShade) break; // stop asap when there is a discrepancy
 
             vec3 testPos = lightPos;
             if (k == 1) { // up left
-                testPos.x -= lightSize.x*0.5;
-                testPos.z -= lightSize.y*0.5;
+                testPos.x -= lightSize.x;
+                testPos.z -= lightSize.y;
             }
             else if (k == 2) { // bottom right
-                testPos.x += lightSize.x*0.5;
-                testPos.z += lightSize.y*0.5;
+                testPos.x += lightSize.x;
+                testPos.z += lightSize.y;
             }
             else if (k == 3) { // up right
-                testPos.x += lightSize.x*0.5;
-                testPos.z -= lightSize.y*0.5;
+                testPos.x += lightSize.x;
+                testPos.z -= lightSize.y;
             }
             else if (k == 4) { // bottom left
-                testPos.x -= lightSize.x*0.5;
-                testPos.z += lightSize.y*0.5;
+                testPos.x -= lightSize.x;
+                testPos.z += lightSize.y;
             }
 
-            getIncidentIntensity(float(k), P, testPos, lightBrightness, lightSize, lightSpot, false, L_dist, L, incidentIntensity);
+            vec3 L = testPos - P;
+            float L_dist = length(L);
+            L = normalize(L);
+            float L_dot_Ns = dot(L, N_surface);
+            
+            if (L_dot_Ns > 0.0) { // If no light falls to this point, do not check for shadows
+                vec3 irradiance = lightEmission;
+                if (isAreaLight) {
+                    irradiance *= areaLightIrradiance(L, L_dist, N_light, L_dot_Ns, lightCosHalfFOV, PDF_rcp);
+                } else {
+                    irradiance *= areaPointLightIrradiance(L, L_dist, N_light, L_dot_Ns, lightCosHalfFOV, PDF_rcp);
+                }
 
-            if (dot(N, L) > 0.0 && incidentIntensity.r + incidentIntensity.g + incidentIntensity.b > 0.01) { // If no light falls to this point, do not check for shadows
-                float t_shadowHit = L_dist;
-                intersectShadowRay(P, L, t_shadowHit);
-                if (abs(t_shadowHit - L_dist) < EPSILON) {
-                    light_sum += incidentIntensity * shadePhong(V, N, L, diffuseColor, specularColor);
+                if (any(greaterThan(irradiance, vec3(0.001))) && !intersectShadowRay(P, L, L_dist)) {
+                    shading += irradiance * shadePhong(V, N_surface, L, diffuseColor, specularColor);
                     inLight = true;
                 } else {
-                    inShade = true; // in shadow of object
+                    inShade = true;
                 }
             } else {
                 inShade = true;
@@ -361,28 +427,30 @@ vec3 directIllumination(vec3 P, vec3 V, vec3 N, vec3 diffuseColor, vec3 specular
 
         // If after 5 test samples there is atleast one ray that doesn't reach light and one that reaches the light, the point should have more accurate shading (shadow edges)
         if (isAreaLight && inLight && inShade) {
-            areaShadowSamples = shadowSamples;
-            light_sum = vec3(0.0); // Start the sampling over, because keeping the results of regular sampling would produce banding
+            areaShadowSamples = u_directSamples;
+            shading = vec3(0.0); // Start the sampling over, because keeping the results of regular sampling would produce banding
+            
             for (int k = 0; k < areaShadowSamples; k++) {
-                vec3 incidentIntensity, L;
-                float L_dist;
-                getIncidentIntensity(float(k), P, lightPos, lightBrightness, lightSize, lightSpot, true, L_dist, L, incidentIntensity);
+                vec3 Pl = sampleAreaLightStratified(lightPos, lightSize, rnd, float(k));
+                vec3 L = Pl - P;
+                float L_dist = length(L);
+                L = normalize(L);
                 
-                float t_shadowHit = L_dist;
-                if (!intersectShadowRay(P, L, t_shadowHit)) {
-                    light_sum += incidentIntensity * shadePhong(V, N, L, diffuseColor, specularColor);
+                if (!intersectShadowRay(P, L, L_dist)) {
+                    float L_dot_Ns = dot(L, N_surface);
+                    vec3 irradiance = lightEmission * areaLightIrradiance(L, L_dist, N_light, L_dot_Ns, lightCosHalfFOV, PDF_rcp);
+                    shading += irradiance * shadePhong(V, N_surface, L, diffuseColor, specularColor);
                 }
             }
         }
 
-        illuminationColor += light_sum / float(areaShadowSamples);
+        illuminationColor += shading / float(areaShadowSamples);
     }
     return illuminationColor;
 }
 
 // Faster direct illumination calculation with one sample
-// includes phong shading (without specularity)
-vec3 directIlluminationFast(vec3 P, vec3 N, vec3 diffuseColor) {
+vec3 directIlluminationFast(vec3 P, vec3 N_surface, vec3 diffuseColor) {
     vec3 illuminationColor;
 
     // Add direct lighting from each light
@@ -392,34 +460,22 @@ vec3 directIlluminationFast(vec3 P, vec3 N, vec3 diffuseColor) {
         vec3 L = lightPos[i] - P;
         float L_dist = length(L);
         L = normalize(L);
+        float L_dot_Ns = dot(L, N_surface);
         
-        vec2 lightSpot = lightSpot[i];
-        float spotAttenuation = 1.0;
-        if (lightSpot.x > 0.0) {
-            float dot_to_light = dot(L, vec3(0.0, 1.0, 0.0));
-            spotAttenuation = (dot_to_light > lightSpot.x) ? pow(dot_to_light, lightSpot.y) : 0.0;
-        }
+        if (L_dot_Ns > 0.0) {
+            vec2 lightSize = lightSize[i];
+            vec3 N_light = vec3(0, -1, 0);
+            float lightCosHalfFOV = cos(0.5*lightSpot[i].x);
+            float PDF_rcp = (lightSize.x > 0.0 && lightSize.y > 0.0) ? 4.0f * lightSize.x * lightSize.y : 1.0f;
             
-        if (spotAttenuation > 0.0) { // Skip if the point is outside of spotlight
-            vec3 lightBrightness = lightBrightness[i];
-            float distAttenuation = 1.0 / (attenuationFactor.x*square(L_dist) + attenuationFactor.y*L_dist);
-                
-            if (distAttenuation > 0.004) { // Skip if the brightness of light at the point is too small
-                float NoL = dot(N, L);
+            vec3 irradiance = u_lightEmission[i] * areaPointLightIrradiance(L, L_dist, N_light, L_dot_Ns, lightCosHalfFOV, PDF_rcp);
 
-                // Skip if normal and vector to light point at different directions
-                if (NoL > 0.0) {
-                    
-                    // Skip if the light ray intersected with an object before reaching the point
-                    float shadowHitDist = L_dist;
-                    if (!intersectShadowRay(P, L, shadowHitDist)) {
-                        vec3 illuminationIntensity = lightBrightness * distAttenuation * spotAttenuation;
-                        illuminationColor += diffuseColor * illuminationIntensity * NoL;
-                    }
-                }
+            if (any(greaterThan(irradiance, vec3(0.001))) && !intersectShadowRay(P, L, L_dist)) {
+                illuminationColor += irradiance * diffuseColor;
             }
         }
     }
+
     return illuminationColor;
 }
 
@@ -454,45 +510,66 @@ vec3 importanceSampleGGX_VNDF(vec2 u, float alpha, vec3 V, mat3 basis) {
 }
 
 /** 
-* Calculates indirect illumination with Monte Carlo sampling for metallic surfaces
-*   - Uses VNDF importance sampling to model GGX BRDF
-*   - Uses only one bounce due to exponential performance hit
-* 
-* Arguments:
-*   P           : the point at which lighting is calculated
-*   V           : direction of ray (towards P)
-*   N           : surface normal at P
-*   diffuse     : diffuse color of surface at P
-*   roughness   : [0,1] non squared roughness of surface at P
-*
-* Returns:
-*   vec3        : indirect light at P
-*/
+ *  Calculates indirect illumination with Monte Carlo sampling for metallic surfaces.
+ *  Uses VNDF importance sampling to model GGX BRDF.
+ *  Uses only one bounce due to exponential performance hit.
+ * 
+ *  @param  P           Point at which lighting is calculated.
+ *  @param  V           Direction of ray (towards P).
+ *  @param  N           Surface normal at P.
+ *  @param  diffuse     Diffuse color of surface at P
+ *  @param  roughness   Non squared roughness of surface at P [0,1]
+ *
+ *  @return vec3    indirect light at P
+ */
 vec3 indirectIlluminationGGX(vec3 P, vec3 V, vec3 N, vec3 diffuse, float roughness) {
     vec3 indirect_sampling_sum;
     mat3 basis = construct_ONB_frisvad(N);
     float VNDF_alpha = square(roughness);
     float G1_alpha = square(square(max(roughness, 0.02)));
 
-    for (int i = 0; i < indirectSamples; i++) {
+    for (int i = 0; i < u_indirectSamples; i++) {
 		vec3 H = importanceSampleGGX_VNDF(vec2(random(P.xz), random(P.xy)), VNDF_alpha, V, basis);
 		vec3 R = reflect(V, H);
         float NoR = max(0.0, dot(N, R));
         float G1_NoR = G1_Smith(G1_alpha, NoR);
         R = normalize(R);
 
-        float hitDist = 20.0;
         vec3 P2, N2, diffuse2, specular2, reflective2;
         float roughness2;
         bool intersectLight = true;
         
         // Intersect the bounced ray
         // Add lighting from the secondary hit point
-        intersect(P, R, hitDist, 0.01, P2, N2, diffuse2, specular2, reflective2, roughness2, intersectLight);
-        indirect_sampling_sum += intersectLight ? diffuse2 : G1_NoR * directIlluminationFast(P2, N2, diffuse2+reflective2);
+        if (intersect(P, R, 20.0, EPSILON, P2, N2, diffuse2, specular2, reflective2, roughness2, intersectLight))
+            indirect_sampling_sum += intersectLight ? diffuse2 : G1_NoR * directIlluminationFast(P2, N2, diffuse2+reflective2);
     }
     // Return the scaled indirect light
-    return ((indirect_sampling_sum*rcp_indirectSamples) * diffuse);
+    return ((indirect_sampling_sum*u_rcp_indirectSamples) * diffuse);
+}
+
+// Forms an orthogonal matrix with N as the last column, i.e.,
+// a coordinate system aligned such that N is its local z axis.
+mat3 formBasis(vec3 N) {
+    vec3 Nt;
+    if (abs(N.x) > abs(N.y)) 
+        Nt = vec3(N.z, 0.0, -N.x) / sqrt(N.x * N.x + N.z * N.z); 
+    else 
+        Nt = vec3(0.0, -N.z, N.y) / sqrt(N.y * N.y + N.z * N.z); 
+    vec3 Nb = cross(N, Nt);
+
+    return mat3(Nt, Nb, N);
+}
+
+// Get random cosine-weighted point (direction) on a hemisphere.
+vec3 cosineHemisphereDir(vec2 rand) {
+    // https://blog.thomaspoulet.fr/uniform-sampling-on-unit-hemisphere/
+    float m = 1.0;
+    float theta = acos(pow(1.0-random(rand), 1.0/(1.0+m)));
+    float phi = 2.0 * PI * random(rand.yx);
+    vec2 diskXY = vec2(sin(theta)*cos(phi), sin(theta)*sin(phi));
+    
+    return vec3(diskXY, sqrt(1.0f - pow(diskXY.x, 2.0f) - pow(diskXY.y, 2.0f)));
 }
 
 // Get semi-random point in unit sphere using fibonacci spiral (https://stackoverflow.com/questions/9600801/evenly-distributing-n-points-on-a-sphere)
@@ -506,43 +583,45 @@ vec3 fibonacciSphereDir(vec2 rand, float sampleIdx, float inv_samples, float jit
 // Same as indirectGGX, but optimized for fully diffuse surfaces
 vec3 indirectIlluminationLambert(vec3 P, vec3 V, vec3 N, vec3 diffuseColor) {
     vec3 indirect_sampling_sum;
-    vec3 mirrorDir = reflect(V, N);
+    //vec3 mirrorDir = reflect(V, N);
     vec2 rand = P.yx*P.z;
+    mat3 B = formBasis(N);
 
-    for (int i = 0; i < indirectSamples; i++) {
+    for (int i = 0; i < u_indirectSamples; i++) {
         // Direction is calculated with Lambert's cosine law (https://raytracing.github.io/books/RayTracingInOneWeekend.html#diffusematerials)
-        vec3 diffuseDir = normalize(N + fibonacciSphereDir(rand, float(i)+0.5, rcp_indirectSamples, indirectJitterScale));
-        vec3 R = normalize(mix(mirrorDir, diffuseDir, 1.0));
+        //vec3 diffuseDir = normalize(N + fibonacciSphereDir(rand, float(i)+0.5, u_rcp_indirectSamples, u_indirectJitterScale));
+        //vec3 R = normalize(mix(mirrorDir, diffuseDir, 1.0));
+        vec3 R = normalize(B * cosineHemisphereDir(rand));
 
-        float hitDist = 10.0;
         vec3 P2, N2, diffuse2, specular2, reflective2;
         float roughness2;
         bool intersectLight = false;
 
-        intersect(P, R, hitDist, 0.01, P2, N2, diffuse2, specular2, reflective2, roughness2, intersectLight);
-        indirect_sampling_sum += directIlluminationFast(P2, N2, diffuse2+reflective2);
+        if (intersect(P, R, 10.0, EPSILON, P2, N2, diffuse2, specular2, reflective2, roughness2, intersectLight))
+            indirect_sampling_sum += directIlluminationFast(P2, N2, diffuse2+reflective2);
     }
-    return ((indirect_sampling_sum*rcp_indirectSamples) * diffuseColor);
+    return indirect_sampling_sum * u_rcp_indirectSamples * diffuseColor;
 }
 
 // Calculates and returns mirror reflections on a given point
 vec3 reflectionIllumination(vec3 P, vec3 V, vec3 N, vec3 reflectiveColor) {
     vec3 reflectionSum;
-    for (int i = 0; i < rayBounces; i++) {
+    for (int i = 0; i < u_reflectionBounces; i++) {
         if (reflectiveColor.x + reflectiveColor.y + reflectiveColor.z == 0.0) break; // Stop if we reach max number of bounces or hit material that is not reflective
 
         V = reflect(V, N); // Get the direction of the reflected ray
         
-        float hitDist = 20.0;
         vec3 P2, diffuse2, specular2, reflective2;
         float roughness2;
         bool intersectLight = true;
 
         // Trace the reflected ray and add the result to pixel
-        intersect(P, V, hitDist, 0.01, P2, N, diffuse2, specular2, reflective2, roughness2, intersectLight);
-        vec3 mirror_sample_color = intersectLight ? diffuse2 : directIllumination(P2, V, N, diffuse2, specular2, false);
+        if (!intersect(P, V, 20.0, EPSILON, P2, N, diffuse2, specular2, reflective2, roughness2, intersectLight))
+            break;
         
-        if (enableRefGI) // Add indirect illumination to reflection
+        vec3 mirror_sample_color = intersectLight ? diffuse2 : directIllumination(P2, V, N, diffuse2, specular2, true);
+        
+        if (u_enableRefGI) // Add indirect illumination to reflection
             mirror_sample_color += indirectIlluminationLambert(P2, V, N, diffuse2);
         else
             mirror_sample_color += ambientLight * diffuse2;
@@ -571,12 +650,12 @@ vec3 ACESFilm(vec3 x) {
     return clamp(x, 0.0, 1.0);
 }
 
-// Simple color averaging from previous frames
-vec4 averageTAA(vec3 pixelColor) {
-    if (enableTAA)
-        return u_taaBlendFactor * min(vec4(pixelColor, 1), 1.0) + (1.0-u_taaBlendFactor) * texture(u_texture, texCoord);
+// Color accumulation with moving exponential average
+vec3 accumulateTAA(vec3 pixelColor) {
+    if (u_runTAA)
+        return mix(texture(u_accumTexture, texCoord).rgb, pixelColor, u_taaBlendFactor);
     else
-        return vec4(pixelColor, 1);
+        return pixelColor;
 }
 
 
@@ -586,28 +665,34 @@ void main() {
     vec3 pixelColor, diffuseColor, specularColor, reflectiveColor, normal, point;
     float roughness;
     bool intersectLight = true;
-    randomIncrement = randomseed;
+    randomIncrement = u_randomseed;
 
     // intersect the ray with objects (tmin is 0, because vertex shader places the origin of the ray in near clipping distance)
-    intersect(origin, ray_dir, hit_dist, 0.0, point, normal, diffuseColor, specularColor, reflectiveColor, roughness, intersectLight);
+    if (!intersect(origin, ray_dir, hit_dist, 0.0, point, normal, diffuseColor, specularColor, reflectiveColor, roughness, intersectLight)) {
+        out_accumulateColor = vec4(accumulateTAA(vec3(0.0)), 1.0);
+        out_finalColor = out_accumulateColor;
+        return;
+    }
 
     // If the ray hit a light, return its color because it doesn't have any other properties than surface color
     if (intersectLight) {
-        fragColor = averageTAA(diffuseColor);
+        pixelColor = min(diffuseColor, vec3(1.0));
+        out_accumulateColor = vec4(accumulateTAA(pixelColor), 1.0);
+        out_finalColor = out_accumulateColor;
         return;
     }
 
     // Ambient light
-    if (!enableGI)
+    if (!u_enableGI)
         pixelColor += ambientLight * diffuseColor;
 
     // ==== DIRECT ILLUMINATION ====
     // For GGX surfaces direct illumination may or may not be added; currently scale the amount by roughness
-    // See more about conductors and dielectrics in: https://google.github.io/filament/Filament.html#figure_dielectricconductor
+    // Details for conductors and dielectrics in: https://google.github.io/filament/Filament.html#figure_dielectricconductor
     pixelColor += roughness * directIllumination(point, ray_dir, normal, diffuseColor, specularColor, true);
 
     // ==== INDIRECT ILLUMINATION ====
-    if (enableGI && diffuseColor.r > 0.0 && diffuseColor.g > 0.0 && diffuseColor.b > 0.0) {
+    if (u_enableGI && diffuseColor.r > 0.0 && diffuseColor.g > 0.0 && diffuseColor.b > 0.0) {
         if (roughness < 1.0) // GGX is much slower, so use it only when needed
             pixelColor += indirectIlluminationGGX(point, ray_dir, normal, diffuseColor, roughness);
         else
@@ -615,13 +700,16 @@ void main() {
     }
         
     // ==== MIRROR REFLECTION ====
-    if (rayBounces > 0 && length(reflectiveColor) > 0.0)
+    if (u_reflectionBounces > 0 && length(reflectiveColor) > 0.0)
         pixelColor += reflectionIllumination(point, ray_dir, normal, reflectiveColor);
 
     // ==== POST FX & OUTPUT ====
+    // Accumulate in linear light. Produces correct averages, but breaks TAA for highlights when clipped back to [0,1].
+    pixelColor = accumulateTAA(pixelColor);
+    out_accumulateColor = vec4(pixelColor, 1.0);
+
     // ACES tonemapping (source: https://github.com/TheRealMJP/BakingLab/blob/master/BakingLab/ACES.hlsl)
     pixelColor = ACESFilm(pixelColor);
     pixelColor = LinearToSRGB(pixelColor);
-    
-    fragColor = averageTAA(pixelColor);
+    out_finalColor = vec4(pixelColor, 1.0);
 }

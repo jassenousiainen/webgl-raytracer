@@ -28,6 +28,7 @@ for (let iter = 0; iter < HALTON_SAMPLES; iter++) {
 const fpsElem = document.getElementById('fps');
 let usingA = true
 let enableTAA = true
+let resetTAA = false
 let rotatingCamera = false
 let keyDownW = false
 let keyDownA = false
@@ -35,9 +36,11 @@ let keyDownS = false
 let keyDownD = false
 let deltaTime = 0
 let then = 0
-let frameNumber = 1
+let fps = 1
+let fpsStart = performance.now()
+let fpsFrameCount = 0
+let frameNumberTAA = 1
 let jitterSampleIdx = 0
-let avgFps = 0
 
 // Create WebGL 2 context
 const canvas = document.querySelector("#canvas");
@@ -50,53 +53,104 @@ const gl = canvas.getContext("webgl2", {
     desynchronized: false, // Enabling low latency mode also requires that alpha is false
     preserveDrawingBuffer: false
 });
+
+const ext = gl.getExtension("EXT_color_buffer_float")
+if (!ext) {
+    console.log("Cannot render to floating point textures!")
+}
+
 const program = initializeProgram(gl, vertexShaderSource, fragmentShaderSource)
 
-// Defining uniform locations that are accessed frequently
-const runTAALoc         = gl.getUniformLocation(program, 'enableTAA')
-const randLoc           = gl.getUniformLocation(program, 'randomseed')
-const sphereZeroPosLoc  = gl.getUniformLocation(program, 'sphereCenters[0]')
-const textureLocation   = gl.getUniformLocation(program, "u_texture")
-const u_taaBlendFactor  = gl.getUniformLocation(program, "u_taaBlendFactor");
+
+// Get shader uniform locations.
+const u_runTAA = gl.getUniformLocation(program, 'u_runTAA')
+const u_enableGI = gl.getUniformLocation(program, 'u_enableGI')
+const u_enableRefGI = gl.getUniformLocation(program, 'u_enableRefGI')
+const u_enableTonemapping = gl.getUniformLocation(program, 'u_enableTonemapping')
+const u_enableGammaCorrection = gl.getUniformLocation(program, 'u_enableGammaCorrection')
+const u_enablePlaneBacksides = gl.getUniformLocation(program, 'u_enablePlaneBacksides')
+const u_enablePlaneMirrors = gl.getUniformLocation(program, 'u_enablePlaneMirrors')
+const u_randomseed = gl.getUniformLocation(program, 'u_randomseed')
+const u_taaBlendFactor = gl.getUniformLocation(program, 'u_taaBlendFactor')
+const u_directSamples = gl.getUniformLocation(program, 'u_directSamples')
+const u_directSamplesSqrt = gl.getUniformLocation(program, 'u_directSamplesSqrt')
+const u_indirectSamples = gl.getUniformLocation(program, 'u_indirectSamples')
+const u_rcp_indirectSamples = gl.getUniformLocation(program, 'u_rcp_indirectSamples')
+const u_reflectionBounces = gl.getUniformLocation(program, 'u_reflectionBounces')
+const u_accumTexture = gl.getUniformLocation(program, "u_accumTexture")
+
+const sphereZeroPosLoc = gl.getUniformLocation(program, 'sphereCenters[0]')
 
 
 // --- Framebuffer A ---
-// Create a texture to render to
-const textureA = createAndSetupTexture(gl);
-gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, gl.canvas.width, gl.canvas.height, 0, gl.RGBA, gl.FLOAT, null);
+const framebufferA = gl.createFramebuffer()
+gl.bindFramebuffer(gl.FRAMEBUFFER, framebufferA)
 
-// Create and bind the framebuffer
-const framebufferA = gl.createFramebuffer();
-gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, framebufferA);
+const finalTexture = createAndSetupTexture(gl)
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, gl.canvas.width, gl.canvas.height, 0, gl.RGBA, gl.FLOAT, null)
+gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, finalTexture, 0)
 
-// attach the texture as the first color attachment
-gl.framebufferTexture2D(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, textureA, 0);
+const textureA = createAndSetupTexture(gl)
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, gl.canvas.width, gl.canvas.height, 0, gl.RGBA, gl.FLOAT, null)
+gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, textureA, 0)
+
+gl.drawBuffers([ gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1 ])
+gl.readBuffer(gl.COLOR_ATTACHMENT0)
 
 // --- Framebuffer B ---
-const textureB = createAndSetupTexture(gl);
-gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, gl.canvas.width, gl.canvas.height, 0, gl.RGBA, gl.FLOAT, null);
-const framebufferB = gl.createFramebuffer();
-gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, framebufferB);
-gl.framebufferTexture2D(gl.DRAW_FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, textureB, 0);
+const framebufferB = gl.createFramebuffer()
+gl.bindFramebuffer(gl.FRAMEBUFFER, framebufferB)
+
+gl.bindTexture(gl.TEXTURE_2D, finalTexture)
+gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, finalTexture, 0)
+
+const textureB = createAndSetupTexture(gl)
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, gl.canvas.width, gl.canvas.height, 0, gl.RGBA, gl.FLOAT, null)
+gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, textureB, 0)
+
+gl.drawBuffers([ gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1 ])
+gl.readBuffer(gl.COLOR_ATTACHMENT0)
+
+
+let syncs = [ null, null, null, null, null ]
+let sync_i = 0
+
+function syncFrame(vsync) {
+    const next_i = (sync_i+1) % 5
+    const status = syncs[next_i] != null ? gl.getSyncParameter(syncs[next_i], gl.SYNC_STATUS) : gl.SIGNALED
+
+    if (status == gl.SIGNALED) { // rendering is complete -> start next frame
+        sync_i = next_i
+        syncs[sync_i] = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0)
+        if (vsync)
+            requestAnimationFrame(render)
+        else
+            Promise.resolve(1).then(render)
+        return
+    }
+    
+    setTimeout(syncFrame, 0)
+}
 
 
 // ===== RENDERLOOP =====
-function drawScene(now) {
-    now = (now || 0) * 0.001
-    deltaTime = now - then
+function render() {
+    let now = performance.now()
+    deltaTime = (now - then) / 1000.0
     then = now
 
-    let runTAA = enableTAA
-
-    if (rotatingCamera || keyDownW || keyDownA || keyDownS || keyDownD) {
+    const moving = rotatingCamera || keyDownW || keyDownA || keyDownS || keyDownD
+    if (moving) {
         updateCamera(deltaTime)
         rotatingCamera = false
-        runTAA = false
-        frameNumber = 1
     }
 
-    if (frameNumber != 1)
-        avgFps += 1.0/deltaTime
+    let runTAA = enableTAA
+    if (resetTAA && enableTAA) {
+        resetTAA = false
+        runTAA = false
+        frameNumberTAA = 1
+    }
 
     if (runTAA) {
         updateJitterTAA()
@@ -105,14 +159,17 @@ function drawScene(now) {
 
     if (!runTAA || jitterSampleIdx >= HALTON_SAMPLES)
         jitterSampleIdx = 0
+
+    // When true render accumulation/TAA is enabled and framelimiter/V-sync is disabled. 
+    const accumulationRender = !moving && runTAA
     
-    gl.uniform1i(runTAALoc, runTAA)
+    gl.uniform1i(u_runTAA, runTAA)
     
     //updateLightRotation(deltaTime)
     //updateSpherePosition(deltaTime)
 
     // Set random seed for each frame, so that noise doesn't stay static between frames
-    gl.uniform1f(randLoc, Math.random())
+    gl.uniform1f(u_randomseed, Math.random())
     
     if (enableTAA) {
         // --- Draw the scene to a texture ---
@@ -120,28 +177,31 @@ function drawScene(now) {
         const fb = usingA ? framebufferA : framebufferB
 
         // render to texture located in color attachement 0 by binding the framebuffer
-        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, fb);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fb)
 
         // Bind the texture of previous frame
-        gl.bindTexture(gl.TEXTURE_2D, usingA ? textureB : textureA);
+        gl.bindTexture(gl.TEXTURE_2D, usingA ? textureB : textureA)
 
         // Clear the attachment(s).
-        gl.clearColor(0, 0, 0, 1);
-        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.clearColor(0, 0, 0, 1)
+        gl.clear(gl.COLOR_BUFFER_BIT)
 
         // Tell the shader to use texture unit 0 for u_texture
-        gl.uniform1i(textureLocation, 0);
+        gl.uniform1i(u_accumTexture, 0)
 
         // The amount of how much to blend this frame to the result
-        gl.uniform1f(u_taaBlendFactor, 1.0/frameNumber);
+        gl.uniform1f(u_taaBlendFactor, 1.0/frameNumberTAA)
 
         // Render the scene
         gl.drawArrays(gl.TRIANGLES, 0, 3)
 
-        // --- Draw the texture to canvas ---
-        gl.bindFramebuffer(gl.READ_FRAMEBUFFER, fb);
-        gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
-        gl.blitFramebuffer(0, 0, gl.canvas.width, gl.canvas.height, 0, 0, gl.canvas.width, gl.canvas.height, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+        // Present only at 30 fps when accumulating
+        if (!accumulationRender || frameNumberTAA % Math.max(1, Math.floor(fps/30)) == 0) {
+            // --- Draw the texture to canvas ---
+            gl.bindFramebuffer(gl.READ_FRAMEBUFFER, fb); // Reading from color attachment 0 (gl.readBuffer above)
+            gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+            gl.blitFramebuffer(0, 0, gl.canvas.width, gl.canvas.height, 0, 0, gl.canvas.width, gl.canvas.height, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+        }
 
         usingA = !usingA
     }
@@ -150,28 +210,40 @@ function drawScene(now) {
         gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
         gl.drawArrays(gl.TRIANGLES, 0, 3)
     }
-    
-    if (frameNumber % 10 == 0) {
-        fpsElem.innerText = Math.round(avgFps/10)
-        avgFps = 0
-    }
 
-    frameNumber++
+    frameNumberTAA++
+    fpsFrameCount++
+
+    const fpsTime = (now - fpsStart) / 1000.0
+    if (fpsTime >= 0.5) {
+        fpsStart = now
+        fps = fpsFrameCount/fpsTime
+        fpsElem.innerText = Math.round(fps)
+        if (!accumulationRender)
+            fpsElem.innerText += " (VSync)"
+        fpsFrameCount = 0
+    }
     
-    requestAnimationFrame(drawScene)
+    syncFrame(!accumulationRender)
+}
+
+function present() {
+    const fb = framebufferA
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, fb);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+    gl.blitFramebuffer(0, 0, gl.canvas.width, gl.canvas.height, 0, 0, gl.canvas.width, gl.canvas.height, gl.COLOR_BUFFER_BIT, gl.NEAREST);
+    requestAnimationFrame(present)
 }
 
 // ===== UNIFORM UPDATES =====
 let enableGI = true
 let enableRefGI = true
-let indirectSamples = 30
+let indirectSamples = 10
 let reflectionBounces = 1
 let enableAreaLights = true;
-let shadowSamples = 9;
+let shadowSamples = 4;
 let enablePlaneBacksides = true;
 let enablePlaneMirrors = false;
-let quadraticAttenuation = 1.5;
-let linearAttenuation = 0;
 
 let xmove = 0
 let moveinv = 1.0
@@ -235,6 +307,8 @@ function updateCamera(delta) {
     gl.uniform1f(gl.getUniformLocation(program, 'near'), near)
     gl.uniform1f(gl.getUniformLocation(program, 'far'), far)
     gl.uniformMatrix4fv(gl.getUniformLocation(program, 'invprojview'), false, inverseProjectionViewMatrix)
+
+    resetTAA = true;
 }
 
 function updatePlanes() {
@@ -256,6 +330,8 @@ function updatePlanes() {
         gl.uniform1f(planeSpecularLoc, renderPlanes[i].specular)
         gl.uniform1f(planeRoughnessLoc, renderPlanes[i].roughness)
     }
+
+    resetTAA = true;
 }
 
 function updateSpheres() {
@@ -275,6 +351,8 @@ function updateSpheres() {
         gl.uniform3f(specColLoc, sphere.sr, sphere.sg, sphere.sb)
         gl.uniform1f(sphereRoughnessLoc, sphere.roughness)
     }
+
+    resetTAA = true;
 }
 
 function updateSpherePosition(delta) {
@@ -300,13 +378,15 @@ function updateLights() {
         const light = renderLights[i];
         const posLoc = gl.getUniformLocation(program, 'lightPos[' + i + ']')
         const sizeLoc = gl.getUniformLocation(program, 'lightSize[' + i + ']')
-        const colLoc = gl.getUniformLocation(program, 'lightBrightness[' + i + ']')
+        const colLoc = gl.getUniformLocation(program, 'u_lightEmission[' + i + ']')
         const spotLoc = gl.getUniformLocation(program, 'lightSpot[' + i + ']')
         gl.uniform3f(posLoc, light.x, light.y, light.z)
         gl.uniform2f(sizeLoc, enableAreaLights ? light.sizeX : 0, enableAreaLights ? light.sizeY : 0)
         gl.uniform3f(colLoc, light.r * light.brightness, light.g * light.brightness, light.b * light.brightness)
         gl.uniform2f(spotLoc, light.spotSize, light.spotIntensity)
     }
+
+    resetTAA = true;
 }
 
 function updateLightRotation(delta) {
@@ -329,18 +409,18 @@ function updateLightRotation(delta) {
 
 function updateRenderingSettings() {
     gl.uniform3f(gl.getUniformLocation(program, 'ambientLight'), 0.01, 0.01, 0.01)
-    gl.uniform1i(gl.getUniformLocation(program, 'enableGI'), enableGI)
-    gl.uniform1i(gl.getUniformLocation(program, 'enableRefGI'), enableRefGI)
-    gl.uniform1i(gl.getUniformLocation(program, 'indirectSamples'), indirectSamples)
-    gl.uniform1f(gl.getUniformLocation(program, 'rcp_indirectSamples'), 1.0/indirectSamples)
-    gl.uniform1f(gl.getUniformLocation(program, 'indirectJitterScale'), Math.pow(indirectSamples, -0.5))
-    gl.uniform1i(gl.getUniformLocation(program, 'rayBounces'), reflectionBounces)
+    gl.uniform1i(u_enableGI, enableGI)
+    gl.uniform1i(u_enableRefGI, enableRefGI)
+    gl.uniform1i(u_enablePlaneBacksides, enablePlaneBacksides)
+    gl.uniform1i(u_enablePlaneMirrors, enablePlaneMirrors)
     const shadowDim = Math.floor(Math.sqrt(shadowSamples))
-    gl.uniform1f(gl.getUniformLocation(program, 'shadowDim'), shadowDim)
-    gl.uniform1i(gl.getUniformLocation(program, 'shadowSamples'), Math.pow(shadowDim, 2)) // number of samples is forced to power of 2
-    gl.uniform1i(gl.getUniformLocation(program, 'enablePlaneBacksides'), enablePlaneBacksides)
-    gl.uniform1i(gl.getUniformLocation(program, 'enablePlaneMirrors'), enablePlaneMirrors)
-    gl.uniform2f(gl.getUniformLocation(program, 'attenuationFactor'), quadraticAttenuation, linearAttenuation)
+    gl.uniform1f(u_directSamplesSqrt, shadowDim)
+    gl.uniform1i(u_directSamples, Math.pow(shadowDim, 2)) // number of samples is forced to power of 2
+    gl.uniform1i(u_indirectSamples, indirectSamples)
+    gl.uniform1f(u_rcp_indirectSamples, 1.0/indirectSamples)
+    gl.uniform1i(u_reflectionBounces, reflectionBounces)
+
+    resetTAA = true;
 }
 
 function resizeCanvas() {
@@ -349,19 +429,23 @@ function resizeCanvas() {
     const width = Math.floor(window.innerWidth * window.devicePixelRatio);
     const height = Math.floor(window.innerHeight * window.devicePixelRatio);
 
+    gl.bindTexture(gl.TEXTURE_2D, finalTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, width, height, 0, gl.RGBA, gl.FLOAT, null);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+
     gl.bindTexture(gl.TEXTURE_2D, textureA);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, width, height, 0, gl.RGBA, gl.FLOAT, null);
     gl.bindTexture(gl.TEXTURE_2D, null);
 
     gl.bindTexture(gl.TEXTURE_2D, textureB);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, width, height, 0, gl.RGBA, gl.FLOAT, null);
     gl.bindTexture(gl.TEXTURE_2D, null);
 
     resizeViewport(gl, width, height)
     updateCamera()
 
     // Don't run TAA on first frame after textures have been cleared (they are pure black, which affects the color averaging)
-    frameNumber = 1
+    frameNumberTAA = 1
 }
 
 resizeCanvas()
@@ -369,7 +453,7 @@ updatePlanes()
 updateSpheres()
 updateLights()
 updateRenderingSettings()
-drawScene()
+render()
 
 
 // ===== INPUT EVENT HANDLING =====
@@ -384,15 +468,11 @@ function addLightInputs(i, lightArr) {
         <table class="sliders">
             <tr>
                 <td><label>Bright:</label></td>
-                <td><input type="range" min="0" max="200" step="0.1" value="${lightArr[i].brightness}" id="${i}" class="light-brightness"></td>
+                <td><input type="range" min="0" max="5" step="0.01" value="${Math.log10(lightArr[i].brightness)}" id="${i}" class="light-brightness"></td>
             </tr>
             <tr>
-                <td><label>Spot size:</label></td>
-                <td><input type="range" min="0" max="1" step="0.01" value="${1-lightArr[i].spotSize}" id="${i}" class="light-spotsize"></td>
-            </tr>
-            <tr>
-                <td><label>Spot falloff:</label></td>
-                <td><input type="range" min="0" max="4" step="0.01" value="${lightArr[i].spotIntensity}" id="${i}" class="light-spotintensity"></td>
+                <td><label>Spot cone:</label></td>
+                <td><input type="range" min="0" max="3.15" step="0.01" value="${lightArr[i].spotSize}" id="${i}" class="light-spotsize"></td>
             </tr>
             <tr>
                 <td><label>r:</label></td>
@@ -466,6 +546,10 @@ document.addEventListener('mousemove', e => {
 document.addEventListener('keydown', e => handleKeys(e.code, true))
 document.addEventListener('keyup', e => handleKeys(e.code, false))
 
+document.getElementById('enableUI').addEventListener('input', event => {
+    document.getElementsByClassName('controls')[0].style.display = event.target.checked ? 'block' : 'none'
+})
+
 // General rendering setting inputs
 document.getElementById('enableTAA').addEventListener('input', event => {
     enableTAA = event.target.checked
@@ -479,8 +563,10 @@ document.getElementById('enableRefGI').addEventListener('input', event => {
     enableRefGI = event.target.checked
     updateRenderingSettings()
 })
-document.getElementById('indirectsamples').addEventListener('input', event => {
+const elem_indirectsamples = document.getElementById('indirectsamples')
+elem_indirectsamples.addEventListener('input', event => {
     indirectSamples = event.target.value
+    elem_indirectsamples.nextElementSibling.value = event.target.value
     updateRenderingSettings()
 })
 document.getElementById('directsamples').addEventListener('input', event => {
@@ -501,15 +587,6 @@ document.getElementById('arealightsenable').addEventListener('input', event => {
     enableAreaLights = event.target.checked
     updateLights()
 });
-document.querySelectorAll('.attenuation').forEach(item => {
-    item.addEventListener('input', event => {
-        if (event.target.id === "quadratic")
-            quadraticAttenuation = event.target.value
-        else if (event.target.id === "linear")
-            linearAttenuation = event.target.value
-        updateRenderingSettings()
-    })
-})
 document.querySelectorAll('.light-enable').forEach(item => {
     item.addEventListener('input', event => {
         WorldState.lights[event.target.id].enabled = event.target.checked
@@ -518,13 +595,13 @@ document.querySelectorAll('.light-enable').forEach(item => {
 })
 document.querySelectorAll('.light-brightness').forEach(item => {
     item.addEventListener('input', event => {
-        WorldState.lights[event.target.id].brightness = event.target.value
+        WorldState.lights[event.target.id].brightness = Math.pow(10, event.target.value)
         updateLights()
     })
 })
 document.querySelectorAll('.light-spotsize').forEach(item => {
     item.addEventListener('input', event => {
-        WorldState.lights[event.target.id].spotSize = 1 - event.target.value
+        WorldState.lights[event.target.id].spotSize = event.target.value
         updateLights()
     })
 })
